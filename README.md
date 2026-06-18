@@ -94,9 +94,10 @@ small_talk           →  RetrievalAgent  →  FallbackAgent
 `.env.example`，改几个就行：
 
 ```
-LLM_PROVIDER=openai      # 或者 claude
+LLM_PROVIDER=openai      # openai / claude / deepseek
 LLM_API_KEY=sk-xxx       # 必填
 LLM_MODEL=gpt-4o-mini
+DEEPSEEK_MODEL=deepseek-chat  # 用 deepseek 时才需要
 INTENT_LLM_WEIGHT=0.5    # 觉得 LLM 太慢可以调低
 SUMMARY_TRIGGER_ROUNDS=8 # 几轮开始压缩
 ZSCORE_THRESHOLD=3.0     # 多敏感算异常

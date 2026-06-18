@@ -104,6 +104,12 @@ class LLMClient:
                 return await self._chat_claude(
                     messages, temperature, max_tokens, system
                 )
+            elif provider == "deepseek":
+                return await self._chat_openai(
+                    messages, temperature, max_tokens, system,
+                    base_url=self._settings.deepseek_base_url,
+                    model=self._settings.deepseek_model,
+                )
             else:
                 return await self._chat_openai(
                     messages, temperature, max_tokens, system
@@ -121,22 +127,24 @@ class LLMClient:
         temperature: float,
         max_tokens: int,
         system: Optional[str],
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> str:
-        """OpenAI 兼容协议的对话补全。"""
-        # 构建完整消息列表，支持 system 消息
+        """OpenAI 兼容协议的对话补全（也用于 DeepSeek 等兼容服务）。"""
         full_messages: List[Dict[str, str]] = []
         if system:
             full_messages.append({"role": "system", "content": system})
         full_messages.extend(messages)
 
         payload: Dict[str, Any] = {
-            "model": self._settings.llm_model,
+            "model": model or self._settings.llm_model,
             "messages": full_messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
         headers = self._openai_headers()
-        url = f"{self._settings.llm_base_url.rstrip('/')}/chat/completions"
+        url_base = base_url or self._settings.llm_base_url
+        url = f"{url_base.rstrip('/')}/chat/completions"
 
         resp = await self.http.post(url, json=payload, headers=headers)
         resp.raise_for_status()

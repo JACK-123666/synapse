@@ -71,6 +71,15 @@ class Settings(BaseSettings):
     )
     llm_timeout: int = Field(default=60, description="LLM 请求超时（秒）")
 
+    # DeepSeek 专用配置（兼容 OpenAI 协议，base_url 指向 DeepSeek）
+    deepseek_model: str = Field(
+        default="deepseek-chat", description="DeepSeek 模型名"
+    )
+    deepseek_base_url: str = Field(
+        default="https://api.deepseek.com/v1",
+        description="DeepSeek API base_url（兼容 OpenAI 协议）",
+    )
+
     # ==================== 意图识别三路融合权重 ====================
     intent_llm_weight: float = Field(default=0.5, description="LLM 语义理解权重")
     intent_vector_weight: float = Field(default=0.3, description="向量相似度权重")
