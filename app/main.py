@@ -115,6 +115,10 @@ async def startup() -> None:
     logger.info("Synapse v1.0.0 正在启动...")
     logger.info("LLM Provider: %s, Model: %s",
                 settings.llm_provider, settings.llm_model)
+    logger.info("LLM BaseURL: %s", settings.llm_base_url)
+    logger.info("LLM API Key: %s...", settings.llm_api_key[:8] if settings.llm_api_key else "(empty)")
+    logger.info("DeepSeek URL: %s, Model: %s",
+                settings.deepseek_base_url, settings.deepseek_model)
     logger.info("=" * 60)
 
     # 1. LLM 客户端
