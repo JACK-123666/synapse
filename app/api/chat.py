@@ -41,33 +41,49 @@ router = APIRouter()
 # ============================================================
 
 class ChatRequest(BaseModel):
-    """聊天请求体。
+    """对话请求。
 
-    Attributes:
-        session_id: 会话唯一标识
-        message: 用户输入消息
-        user_id: 用户 ID（可选，用于用户画像）
+    填 session_id 和 message 就能用，user_id 选填。
+    同一个 session_id 会共享短期记忆，实现多轮对话。
     """
 
-    session_id: str = Field(..., min_length=1, description="会话 ID")
-    message: str = Field(..., min_length=1, description="用户消息")
-    user_id: Optional[str] = Field(default=None, description="用户 ID")
+    session_id: str = Field(
+        ..., min_length=1,
+        description="会话标识，随便起个名字就行（如 test-001）。同一会话多轮对话用同一个 ID",
+    )
+    message: str = Field(
+        ..., min_length=1,
+        description="你想说的话，支持模糊短句（如「那个怎么弄」「帮我查一下」）",
+    )
+    user_id: Optional[str] = Field(
+        default=None,
+        description="可选。填了会记录你的偏好，下次回答更懂你",
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "session_id": "demo-001",
+                    "message": "什么是向量数据库？",
+                    "user_id": "u1",
+                },
+                {
+                    "session_id": "demo-001",
+                    "message": "它和 MySQL 有什么区别",
+                },
+            ]
+        }
+    }
 
 
 class ChatResponse(BaseModel):
-    """聊天响应体。
+    """对话响应。"""
 
-    Attributes:
-        reply: Agent 回复文本
-        intent: 识别出的意图标签
-        agent_used: 实际执行的 Agent ID
-        confidence: 意图识别置信度
-    """
-
-    reply: str
-    intent: str
-    agent_used: str
-    confidence: float
+    reply: str = Field(description="Agent 生成的回复内容")
+    intent: str = Field(description="识别出的意图：knowledge_retrieval 查知识 / summarize 做摘要 / small_talk 闲聊")
+    agent_used: str = Field(description="实际干活的是哪个 Agent")
+    confidence: float = Field(description="意图识别的把握有多大（0~1）")
 
 
 class HealthResponse(BaseModel):
@@ -81,22 +97,14 @@ class HealthResponse(BaseModel):
 # POST /chat
 # ============================================================
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat", response_model=ChatResponse, tags=["对话"], summary="发送消息")
 async def chat(request: ChatRequest) -> ChatResponse:
-    """核心对话接口。
+    """发一条消息给 Synapse，拿到回复。
 
-    处理流程：
-    1. 意图识别（三路融合）
-    2. 构建 AgentContext（短期记忆、长期记忆召回、用户画像）
-    3. 路由调度执行 Agent
-    4. 更新记忆（短期记忆追加 + 压缩检查）
-    5. 返回回复
+    背后自动完成：意图识别 → 记忆召回 → Agent 执行 → 记忆更新。
 
-    Args:
-        request: 聊天请求
-
-    Returns:
-        包含回复、意图、Agent 信息的响应
+    同一个 session_id 连续调用即可多轮对话，系统会记住上下文。
+    对话超过 8 轮会自动压缩历史，不额外消耗 Token。
     """
     session_id = request.session_id
     message = request.message
@@ -186,11 +194,11 @@ async def chat(request: ChatRequest) -> ChatResponse:
 # GET /health
 # ============================================================
 
-@router.get("/health", response_model=HealthResponse)
+@router.get("/health", response_model=HealthResponse, tags=["系统"], summary="健康检查")
 async def health() -> HealthResponse:
-    """系统健康检查。
+    """看一眼 Redis、ChromaDB、LLM 还活着没，Agent 状态如何。
 
-    检查 Redis、ChromaDB、LLM 的连通性。
+    返回 healthy 表示一切正常，degraded 表示有模块挂了。
     """
     modules: Dict[str, Any] = {}
 
@@ -238,12 +246,11 @@ async def health() -> HealthResponse:
 # GET /metrics
 # ============================================================
 
-@router.get("/metrics")
+@router.get("/metrics", tags=["系统"], summary="监控指标")
 async def metrics():
-    """Prometheus 指标拉取端点。
+    """Prometheus 吃的指标数据：请求量、延迟分布、Agent 健康分。
 
-    返回 Prometheus 标准格式的指标数据，
-    供 prometheus.yml 中配置的 scrape_config 抓取。
+    配好 prometheus.yml 指向这个端点就能采集。
     """
     from fastapi.responses import Response
     return Response(

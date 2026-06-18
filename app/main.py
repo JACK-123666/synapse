@@ -47,14 +47,34 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 app = FastAPI(
-    title="Synapse - 多 Agent 知识检索平台",
-    description=(
-        "六模块标准化架构：API 网关、意图识别、路由调度、"
-        "Agent 执行器、记忆管理、可观测性与故障恢复"
-    ),
+    title="Synapse · 智能对话平台",
+    description="""
+## 👋 欢迎使用 Synapse
+
+一个带**意图识别**、**记忆管理**和**故障自愈**的智能对话 API。
+
+### 怎么用
+
+1. 先调 `POST /chat` 发一条消息
+2. 拿到的 `session_id` 原样传回，就能多轮对话
+3. 随时调 `GET /health` 看各模块是否正常
+
+### 背后做了什么
+
+你说「那个怎么弄」→ 三路融合识别你要查文档还是闲聊 → 按 Agent 权重路由 →
+检索知识库 / 摘要历史 / 兜底回复 → 自动管理短期和长期记忆。
+
+全程有 Prometheus 盯着，哪个 Agent 慢了自动降权、摘除、恢复。
+""",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    swagger_ui_parameters={
+        "defaultModelsExpandDepth": -1,
+        "displayRequestDuration": True,
+        "filter": True,
+        "tryItOutEnabled": True,
+    },
 )
 
 # CORS 中间件
@@ -225,13 +245,14 @@ async def shutdown() -> None:
 # 根路径
 # ============================================================
 
-@app.get("/")
+@app.get("/", tags=["概览"], summary="平台信息")
 async def root():
-    """根路径，返回欢迎信息。"""
+    """返回平台名称、版本和可用端点。"""
     return {
-        "name": "Synapse - 多 Agent 知识检索平台",
+        "name": "Synapse · 智能对话平台",
         "version": "1.0.0",
-        "docs": "/docs",
-        "health": "/health",
-        "metrics": "/metrics",
+        "文档": "/docs",
+        "健康检查": "/health",
+        "监控指标": "/metrics",
+        "对话接口": "/chat",
     }
