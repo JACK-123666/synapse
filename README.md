@@ -13,7 +13,7 @@
 
 用户说「那个怎么弄」，你得知道他要查文档还是想让你总结——这是意图识别。
 
-查完文档聊了 20 轮，全塞给 LLM 一次烧 5 毛——这是 Token 膨胀。
+查完文档聊了 20 轮，Token 不随轮数线性增长——这是 Token 膨胀。
 
 某天 OpenAI 抽风，RetrievalAgent 全超时，用户看到 500——这是单点故障。
 
@@ -25,8 +25,8 @@ Synapse 就干这三件事。六个模块串一起，跑在 FastAPI 上，Docker
 
 ```bash
 git clone https://github.com/JACK-123666/synapse.git && cd synapse
-cp .env.example .env       # 把 LLM_API_KEY 填上
-docker-compose up -d        # 等 30 秒
+cp .env.example .env       # 把 API_KEY 填上
+docker-compose up -d        
 ```
 
 试一下：
@@ -61,7 +61,7 @@ curl -s -X POST http://localhost:8000/chat \
 
 ### 意图识别
 
-三条路同时跑（`asyncio.gather` 并发），加权投票。哪条路挂了自动把权重让给剩下的。
+三路融合识别，准确路由
 
 | 方法 | 权重 | 一句话 |
 |---|---|---|
@@ -91,7 +91,7 @@ small_talk           →  RetrievalAgent  →  FallbackAgent
 
 ## 配置
 
-抄 `.env.example`，改几个就行：
+`.env.example`，改几个就行：
 
 ```
 LLM_PROVIDER=openai      # 或者 claude
@@ -111,8 +111,8 @@ app/
 ├── main.py          入口，启动时注册 Agent 和路由
 ├── config.py        所有可配参数
 ├── api/chat.py      /chat /health /metrics
-├── llm/client.py    OpenAI / Claude 统一调
-├── intent/          意图识别（三条路 + 融合）
+├── llm/client.py    OpenAI / Claude 
+├── intent/          意图识别
 ├── router/          注册表 + 分发 + 降级
 ├── agents/          Retrieval / Summarize / Fallback
 ├── memory/          短期 / 长期 / 画像 / 压缩
