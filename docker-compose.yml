@@ -23,29 +23,8 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CHROMA_HOST=chromadb
       - CHROMA_PORT=8000
-      - LLM_PROVIDER
-      - LLM_API_KEY
-      - LLM_MODEL
-      - LLM_BASE_URL
-      - DEEPSEEK_MODEL
-      - DEEPSEEK_BASE_URL
-      - EMBEDDING_MODEL
-      - LLM_TIMEOUT
-      - INTENT_LLM_WEIGHT
-      - INTENT_VECTOR_WEIGHT
-      - INTENT_KEYWORD_WEIGHT
-      - SHORT_TERM_MAX_ROUNDS
-      - SHORT_TERM_TTL
-      - SUMMARY_TRIGGER_ROUNDS
-      - LONG_TERM_RECALL_K
-      - TOKEN_BUDGET
-      - AGENT_HEALTH_THRESHOLD
-      - WEIGHT_DECAY_FACTOR
-      - WEIGHT_RECOVERY_FACTOR
-      - AGENT_TIMEOUT
-      - ZSCORE_WINDOW_SIZE
-      - ZSCORE_THRESHOLD
-      - ANOMALY_CHECK_INTERVAL
+    volumes:
+      - ./.env:/app/.env:ro
     depends_on:
       redis:
         condition: service_healthy
