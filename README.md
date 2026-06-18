@@ -1,143 +1,127 @@
-<h1 align="center">Synapse</h1>
-<p align="center">多 Agent 知识检索平台</p>
+# Synapse
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Python-3.11+-3776AB?logo=python" alt="Python">
-  <img src="https://img.shields.io/badge/FastAPI-0.110-009688?logo=fastapi" alt="FastAPI">
-  <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
+多 Agent 知识检索，一条命令启动。
+
+<p>
+  <img src="https://img.shields.io/badge/Python-3.11+-3776AB?logo=python">
+  <img src="https://img.shields.io/badge/license-MIT-blue">
 </p>
 
 ---
 
-一个异步、自愈的生产级 Agent 框架。解决三个实际问题：
+## 干嘛的
 
-- **模糊短句懂你**：「那个怎么弄？」→ 三路融合识别，准确路由
-- **对话越长越省钱**：自动摘要压缩，Token 不随轮数线性增长
-- **Agent 挂了不用管**：Z-score 实时检测，自动摘除、自动恢复
+用户说「那个怎么弄」，你得知道他要查文档还是想让你总结——这是意图识别。
+
+查完文档聊了 20 轮，全塞给 LLM 一次烧 5 毛——这是 Token 膨胀。
+
+某天 OpenAI 抽风，RetrievalAgent 全超时，用户看到 500——这是单点故障。
+
+Synapse 就干这三件事。六个模块串一起，跑在 FastAPI 上，Docker 一行命令起来。
 
 ---
 
-## 快速开始
+## 跑起来
 
 ```bash
 git clone https://github.com/JACK-123666/synapse.git && cd synapse
-cp .env.example .env         # 填入 LLM_API_KEY
-docker-compose up -d
+cp .env.example .env       # 把 LLM_API_KEY 填上
+docker-compose up -d        # 等 30 秒
 ```
+
+试一下：
 
 ```bash
-curl -X POST http://localhost:8000/chat \
+curl -s -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
-  -d '{"session_id":"s1","message":"什么是 RAG？"}'
+  -d '{"session_id":"s1","message":"什么是 RAG"}'
 ```
-
-> 启动后访问 API 文档 → http://localhost:8000/docs
-
----
-
-## API
-
-`POST /chat` — 核心接口。`session_id` 区分会话，`user_id` 可选（画像用）。
 
 ```json
-{ "session_id":"demo","message":"帮我查一下向量数据库","user_id":"u1" }
-```
-```json
-{ "reply":"向量数据库是...","intent":"knowledge_retrieval","agent_used":"retrieval_agent","confidence":0.85 }
+{"reply":"RAG 是检索增强生成...","intent":"knowledge_retrieval","agent_used":"retrieval_agent","confidence":0.85}
 ```
 
-`GET /health` — 各服务连通性 + Agent 实时健康分
+**其他端点**
 
-`GET /metrics` — Prometheus 标准指标（QPS、延迟分布、健康分）
+`GET /health` — Redis、ChromaDB、LLM 连通性，Agent 当前健康分
+
+`GET /metrics` — Prometheus 吃的指标
+
+浏览器打开 http://localhost:8000/docs 有 Swagger。
 
 ---
 
-## 原理
+## 怎么工作的
 
-一条请求走六个模块：
+一条请求穿过六个模块，顺序固定：
 
 ```
-               ┌─ 意图识别 ─→ 路由调度 ─→ Agent 执行 ─┐
-用户消息 ─→ 记忆召回                                   记忆更新 ─→ 回复
-               └────────── 可观测性（横切监控）──────────┘
+用户消息 → 意图识别 → 记忆召回 → 路由调度 → Agent 执行 → 记忆更新 → 返回
 ```
 
-### 意图识别：三路投票
+### 意图识别
 
-LLM 语义、向量相似度、关键词匹配同时跑（`asyncio.gather` 并行），加权融合。LLM 挂了？自动把权重让给另外两路。
+三条路同时跑（`asyncio.gather` 并发），加权投票。哪条路挂了自动把权重让给剩下的。
 
-| 路径 | 权重 | 特点 |
+| 方法 | 权重 | 一句话 |
 |---|---|---|
-| LLM 语义 | 0.5 | 最准，最慢 |
-| 向量相似度 | 0.3 | 中等 |
-| 关键词匹配 | 0.2 | 最快 |
+| LLM 分类 | 0.5 | few-shot prompt，最准 |
+| 向量匹配 | 0.3 | 拿 message embedding 去 ChromaDB 找最近的意图示例 |
+| 关键词 | 0.2 | 扫一遍预置词典，命中就加分 |
 
-### 路由调度：权重 + 降级
+### 路由
 
-每个意图绑定一条降级链：
+每个意图对应一串 Agent——主力的不行换备用的，备用的不行换兜底的。兜底的绝不挂。
 
 ```
-knowledge_retrieval → RetrievalAgent → FallbackAgent
-summarize          → SummarizeAgent → FallbackAgent
-small_talk         → RetrievalAgent → FallbackAgent
+knowledge_retrieval  →  RetrievalAgent  →  FallbackAgent
+summarize            →  SummarizeAgent  →  FallbackAgent
+small_talk           →  RetrievalAgent  →  FallbackAgent
 ```
 
-按权重选 Agent，超时或异常自动降级到下一个。FallbackAgent 100% 兜底。
+选 Agent 看权重，权重看健康分。健康分怎么来的——每条请求的耗时记下来，最近 20 次的均值加三倍标准差是警戒线，超了就降权。降到 0.3 以下直接踢出候选列表，后台每 10 秒偷偷看一眼，恢复了就拉回来。
 
-Z-score 异常检测在后台持续运行：最近 20 次耗时超过「均值+3σ」→ 权重要×0.5 → 健康分<0.3 → 摘除 → 恢复后自动加回。
+### 记忆
 
-### 记忆：三级 + 自动压缩
+三层。短期塞 Redis，长期塞 ChromaDB。
 
-| 层 | 存哪 | 是什么 | 干啥 |
-|---|---|---|---|
-| 短期 | Redis | 最近 10 轮对话 | 上下文连贯 |
-| 长期 | ChromaDB | 历史摘要向量 | 跨会话相似召回 |
-| 画像 | Redis | 偏好标签、术语 | 个性化 prompt |
-
-对话到第 8 轮自动触发压缩（后台异步，不卡回复）：LLM 生成摘要 → embedding 存 ChromaDB → 清 Redis。新会话按语义召回相关历史。
+对话超过 8 轮，后台起个任务把短期记忆丢给 LLM 总结成一段话，转成向量存进 ChromaDB，Redis 里的清掉。下次新会话进来，先拿消息去 ChromaDB 搜，看有没有以前聊过的相似内容，有就拼进 prompt 里。
 
 ---
 
-## 可配置项
+## 配置
 
-全部通过 `.env` 覆盖，核心几个：
+抄 `.env.example`，改几个就行：
 
-| 参数 | 默认 | 说明 |
-|---|---|---|
-| `LLM_PROVIDER` | openai | openai / claude |
-| `LLM_API_KEY` | — | **必填** |
-| `LLM_MODEL` | gpt-4o-mini | |
-| `INTENT_LLM_WEIGHT` | 0.5 | 意图融合权重 |
-| `SUMMARY_TRIGGER_ROUNDS` | 8 | 几轮触发压缩 |
-| `ZSCORE_THRESHOLD` | 3.0 | 异常判定门槛 |
-| `AGENT_HEALTH_THRESHOLD` | 0.3 | 低于此摘除 |
-
-详见 [.env.example](.env.example)。
+```
+LLM_PROVIDER=openai      # 或者 claude
+LLM_API_KEY=sk-xxx       # 必填
+LLM_MODEL=gpt-4o-mini
+INTENT_LLM_WEIGHT=0.5    # 觉得 LLM 太慢可以调低
+SUMMARY_TRIGGER_ROUNDS=8 # 几轮开始压缩
+ZSCORE_THRESHOLD=3.0     # 多敏感算异常
+```
 
 ---
 
 ## 目录
 
 ```
-synapse/
-├── app/
-│   ├── main.py              # 入口 + 生命周期
-│   ├── config.py            # 全局配置
-│   ├── storage.py           # Redis / ChromaDB 连接
-│   ├── api/chat.py          # 端点
-│   ├── llm/client.py        # LLM 封装 (OpenAI/Claude)
-│   ├── intent/              # 意图识别 (LLM+向量+关键词)
-│   ├── router/              # 路由调度 (注册+分发+降级)
-│   ├── agents/              # Agent (检索/摘要/兜底)
-│   ├── memory/              # 记忆 (短期/长期/画像/压缩)
-│   └── observability/       # 监控 (Prometheus+Z-score)
-├── docker-compose.yml       # 一键部署
-├── Dockerfile
-├── prometheus.yml
-└── requirements.txt
+app/
+├── main.py          入口，启动时注册 Agent 和路由
+├── config.py        所有可配参数
+├── api/chat.py      /chat /health /metrics
+├── llm/client.py    OpenAI / Claude 统一调
+├── intent/          意图识别（三条路 + 融合）
+├── router/          注册表 + 分发 + 降级
+├── agents/          Retrieval / Summarize / Fallback
+├── memory/          短期 / 长期 / 画像 / 压缩
+├── observability/   Prometheus 指标 + Z-score
+docker-compose.yml
+Dockerfile
 ```
 
-放一个自定义 Agent → 继承 `BaseAgent`，在 `main.py` 注册路由即用。
+自己加 Agent：继承 `agents/base.py` 里的 `BaseAgent`，`main.py` 启动时注册一下就行。
 
 ---
 
