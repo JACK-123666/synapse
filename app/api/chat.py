@@ -13,6 +13,7 @@ GET /metrics
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, Optional
 
@@ -117,8 +118,12 @@ async def chat(request: ChatRequest) -> ChatResponse:
     # 短期记忆
     short_term_msgs = await short_mem.get_messages(session_id)
 
-    # 长期记忆召回
-    recall = await long_mem.recall(query_text=message, user_id=user_id)
+    # 长期记忆召回（best-effort，ChromaDB 不可用时返回空）
+    try:
+        recall = await long_mem.recall(query_text=message, user_id=user_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[API] 长期记忆召回失败（降级空列表）: %s", exc)
+        recall = []
 
     # 用户画像上下文
     profile_context = await profile_mgr.build_prompt_context(user_id)
@@ -156,10 +161,14 @@ async def chat(request: ChatRequest) -> ChatResponse:
     except Exception as exc:  # noqa: BLE001
         logger.warning("[API] 用户画像更新失败: %s", exc)
 
-    # 检查是否需要摘要压缩
+    # 检查是否需要摘要压缩 — 改为后台异步，不阻塞用户响应
     try:
         compressor = get_memory_compressor()
-        await compressor.compress_if_needed(session_id, user_id)
+        if await compressor.should_compress(session_id):
+            asyncio.create_task(
+                compressor.compress(session_id, user_id),
+                name=f"compress-{session_id}"
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning("[API] 记忆压缩检查失败: %s", exc)
 

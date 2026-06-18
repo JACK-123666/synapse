@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Dict, Optional, Tuple
 
@@ -51,26 +52,32 @@ class IntentFusion:
             (意图标签, 融合置信度) 元组
             - 若所有路均失败，返回 ("small_talk", 1.0) 作为默认兜底
         """
-        # 1. 并行执行三路识别（注意：LLM 调用较慢，向量和关键词可同时进行）
-        #    为简单起见，此处串行执行（向量和关键词可做到并行，再合并 LLM 结果）
+        # 1. 三路并行执行：LLM 最慢，向量和关键词不依赖 LLM 结果，
+        #    通过 asyncio.gather 并发跑，总耗时 = max(各路耗时) 而非 sum
+        llm_task = self._llm.recognize(message)
+        vec_task = self._vector.recognize(message)
+        kw_task = self._keyword.recognize(message)
+
+        results = await asyncio.gather(
+            llm_task, vec_task, kw_task, return_exceptions=True
+        )
+
         llm_result: Optional[Dict[str, float]] = None
         vector_result: Optional[Dict[str, float]] = None
         keyword_result: Optional[Dict[str, float]] = None
 
-        try:
-            llm_result = await self._llm.recognize(message)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("融合器: LLM 意图识别异常: %s", exc)
-
-        try:
-            vector_result = await self._vector.recognize(message)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("融合器: 向量意图识别异常: %s", exc)
-
-        try:
-            keyword_result = await self._keyword.recognize(message)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("融合器: 关键词意图识别异常: %s", exc)
+        for i, (result, name) in enumerate(zip(
+            results, ["LLM", "向量", "关键词"]
+        )):
+            if isinstance(result, Exception):
+                logger.warning("融合器: %s 意图识别异常: %s", name, result)
+            else:
+                if i == 0:
+                    llm_result = result
+                elif i == 1:
+                    vector_result = result
+                else:
+                    keyword_result = result
 
         # 2. 动态权重分配：任一识别器失败时，将其权重重新分配给其他识别器
         weights = self._compute_weights(

@@ -128,6 +128,16 @@ class Settings(BaseSettings):
         ]
     )
 
+    # ==================== 意图描述（LLM few-shot 提示用） ====================
+    # 新增意图时同步在此添加描述，LLM 意图识别器自动生效
+    intent_descriptions: Dict[str, str] = Field(
+        default_factory=lambda: {
+            "knowledge_retrieval": "查询知识、检索文档、了解概念、求知探索",
+            "summarize": "摘要、总结、压缩、概括文本或对话",
+            "small_talk": "问候、闲聊、感谢、道别等非任务型对话",
+        }
+    )
+
     # ==================== 意图关键词字典（关键词投票用） ====================
     # 每个意图对应一组关键词，命中后按匹配数加权
     intent_keywords: Dict[str, List[str]] = Field(

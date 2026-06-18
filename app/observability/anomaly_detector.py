@@ -19,9 +19,8 @@ import logging
 import threading
 from collections import deque
 from dataclasses import dataclass, field
+from statistics import mean, stdev
 from typing import Deque, Dict, Optional
-
-import numpy as np
 
 from app.config import Settings, get_settings
 from app.observability import metrics
@@ -159,25 +158,27 @@ class AnomalyDetector:
         if len(window) < 3:
             return False
 
-        arr = np.array(window, dtype=np.float64)
-        mean = float(np.mean(arr))
-        std = float(np.std(arr))
+        mean_val = mean(window)
+        try:
+            std_val = stdev(window)
+        except Exception:
+            std_val = 0.0
 
         # 标准差为 0（所有耗时完全一致）时，仅当当前耗时明显偏离均值才判异常
-        if std == 0.0:
-            return latency > mean * 1.5
+        if std_val == 0.0:
+            return latency > mean_val * 1.5
 
-        z_score = (latency - mean) / std
+        z_score = (latency - mean_val) / std_val
         threshold = self._settings.zscore_threshold
 
         # 当前耗时超过 μ + Z*σ 即异常
-        is_anomaly = latency > mean + threshold * std
+        is_anomaly = latency > mean_val + threshold * std_val
 
         if is_anomaly:
             logger.warning(
                 "异常检测: Agent '%s' 延迟 %.3fs 超过阈值 "
                 "(μ=%.3f, σ=%.3f, z=%.2f, 阈值=%.1f)",
-                state.agent_id, latency, mean, std, z_score, threshold,
+                state.agent_id, latency, mean_val, std_val, z_score, threshold,
             )
 
         return is_anomaly

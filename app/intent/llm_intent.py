@@ -62,14 +62,10 @@ class LLMIntentRecognizer:
     def _build_system_prompt(self) -> str:
         """构建 few-shot 意图识别的系统提示词。"""
         intents = self._settings.known_intents
-        intent_desc = {
-            "knowledge_retrieval": "查询知识、检索文档、了解概念、求知探索",
-            "summarize": "摘要、总结、压缩、概括文本或对话",
-            "small_talk": "问候、闲聊、感谢、道别等非任务型对话",
-        }
+        descriptions = self._settings.intent_descriptions
 
         intent_lines = "\n".join(
-            f"- {intent}: {intent_desc.get(intent, '其他')}"
+            f"- {intent}: {descriptions.get(intent, '其他')}"
             for intent in intents
         )
 
