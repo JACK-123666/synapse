@@ -1,0 +1,122 @@
+# ============================================================
+# Synapse - Docker Compose 部署编排
+# ============================================================
+# 启动: docker-compose up -d
+# 停止: docker-compose down
+# 查看日志: docker-compose logs -f synapse-api
+# ============================================================
+
+version: "3.9"
+
+services:
+  # ----------------------------------------------------------
+  # FastAPI 应用
+  # ----------------------------------------------------------
+  synapse-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: synapse-api
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      # LLM 配置通过 .env 文件或环境变量注入
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.openai.com/v1}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - LLM_TIMEOUT=${LLM_TIMEOUT:-60}
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - synapse-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ----------------------------------------------------------
+  # Redis - 短期记忆 + 用户画像缓存
+  # ----------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: synapse-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - synapse-network
+
+  # ----------------------------------------------------------
+  # ChromaDB - 向量数据库（长期记忆 + 知识库）
+  # ----------------------------------------------------------
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: synapse-chromadb
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma-data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+      - ALLOW_RESET=TRUE
+    restart: unless-stopped
+    networks:
+      - synapse-network
+
+  # ----------------------------------------------------------
+  # Prometheus - 监控指标采集
+  # ----------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: synapse-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+    restart: unless-stopped
+    networks:
+      - synapse-network
+
+# ============================================================
+# 数据卷（持久化）
+# ============================================================
+volumes:
+  redis-data:
+    driver: local
+  chroma-data:
+    driver: local
+  prometheus-data:
+    driver: local
+
+# ============================================================
+# 网络
+# ============================================================
+networks:
+  synapse-network:
+    driver: bridge

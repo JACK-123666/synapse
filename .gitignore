@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# 环境 & 配置
+.env
+*.env.local
+*.env.production
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Docker
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ChromaDB 本地持久化（Docker 模式下用卷）
+chroma_data/
+
+# Prometheus 数据
+prometheus_data/
+
+# 测试 & 覆盖率
+htmlcov/
+.coverage
+.pytest_cache/

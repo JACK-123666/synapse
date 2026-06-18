@@ -1,0 +1,27 @@
+# ============================================================
+# Prometheus 监控配置
+# ============================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# 告警规则文件（可选）
+# rule_files:
+#   - "alerts.yml"
+
+# 抓取目标配置
+scrape_configs:
+  - job_name: "synapse-api"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["synapse-api:8000"]
+        labels:
+          service: "synapse"
+          module: "api"
+    scrape_interval: 10s
+    scrape_timeout: 8s
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
