@@ -17,6 +17,7 @@ import sys
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.api.chat import router as chat_router
 from app.config import get_settings
@@ -86,8 +87,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 注册路由
-app.include_router(chat_router, prefix="", tags=["Core"])
+# 注册路由（不设置顶层 tags，交给各自端点自行标记）
+app.include_router(chat_router, prefix="")
+
+# 静态文件 — 聊天首页
+app.mount("/", StaticFiles(directory="app/static", html=True), name="static")
 
 
 # ============================================================
@@ -239,20 +243,3 @@ async def shutdown() -> None:
         logger.warning("关闭 ChromaDB 失败: %s", exc)
 
     logger.info("Synapse 已关闭")
-
-
-# ============================================================
-# 根路径
-# ============================================================
-
-@app.get("/", tags=["概览"], summary="平台信息")
-async def root():
-    """返回平台名称、版本和可用端点。"""
-    return {
-        "name": "Synapse · 智能对话平台",
-        "version": "1.0.0",
-        "文档": "/docs",
-        "健康检查": "/health",
-        "监控指标": "/metrics",
-        "对话接口": "/chat",
-    }
