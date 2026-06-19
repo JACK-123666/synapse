@@ -6,11 +6,23 @@
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Dict, List
 
+from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# 在 Settings 类定义之前，手动把 .env 注入 os.environ
+# 优先读 Docker 容器内的绝对路径，其次读开发环境的相对路径
+# override=False：不覆盖 OS 环境变量（docker-compose environment 优先级更高）
+_env_file = Path("/app/.env")
+if not _env_file.exists():
+    _env_file = Path(".env")
+if _env_file.exists():
+    load_dotenv(_env_file, override=False)
 
 
 class Settings(BaseSettings):
@@ -21,19 +33,17 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file="/app/.env",
-        env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
     )
 
-    # ==================== Redis 配置 ====================
+    # Redis 配置
     redis_url: str = Field(
         default="redis://redis:6379/0",
         description="Redis 连接 URL，用于短期记忆与用户画像缓存",
     )
 
-    # ==================== ChromaDB 配置 ====================
+    # ChromaDB 配置
     chroma_host: str = Field(default="chromadb", description="ChromaDB 服务主机")
     chroma_port: int = Field(default=8000, description="ChromaDB 服务端口")
 
@@ -51,7 +61,7 @@ class Settings(BaseSettings):
         default="user_profiles", description="用户画像向量集合"
     )
 
-    # ==================== LLM 配置 ====================
+    # LLM 配置
     llm_provider: str = Field(
         default="openai", description="LLM 提供商: openai / claude"
     )
@@ -69,6 +79,15 @@ class Settings(BaseSettings):
     embedding_model: str = Field(
         default="text-embedding-3-small", description="Embedding 模型名"
     )
+    embedding_api_key: str = Field(
+        default="",
+        description="Embedding 专用 API 密钥；留空回退 llm_api_key。"
+        "DeepSeek 不支持 embedding，需指向支持 embedding 的服务（如 OpenAI）",
+    )
+    embedding_base_url: str = Field(
+        default="",
+        description="Embedding 专用 base_url；留空回退 llm_base_url",
+    )
     llm_timeout: int = Field(default=60, description="LLM 请求超时（秒）")
 
     # DeepSeek 专用配置（兼容 OpenAI 协议，base_url 指向 DeepSeek）
@@ -80,12 +99,22 @@ class Settings(BaseSettings):
         description="DeepSeek API base_url（兼容 OpenAI 协议）",
     )
 
-    # ==================== 意图识别三路融合权重 ====================
+    # 应用层
+    cors_origins: str = Field(
+        default="*",
+        description="CORS 允许来源，逗号分隔；* 表示全部（此时自动禁用凭证）",
+    )
+    docs_enabled: bool = Field(
+        default=True,
+        description="是否开启 /docs /redoc API 文档；生产环境建议设为 false",
+    )
+
+    # 意图识别三路融合权重
     intent_llm_weight: float = Field(default=0.5, description="LLM 语义理解权重")
     intent_vector_weight: float = Field(default=0.3, description="向量相似度权重")
     intent_keyword_weight: float = Field(default=0.2, description="关键词投票权重")
 
-    # ==================== 记忆管理 ====================
+    # 记忆管理
     short_term_max_rounds: int = Field(
         default=10, description="短期记忆最大保留轮数"
     )
@@ -102,7 +131,7 @@ class Settings(BaseSettings):
         default=4000, description="单次 Token 估算上限，超出触发压缩"
     )
 
-    # ==================== 路由与故障恢复 ====================
+    # 路由与故障恢复
     agent_health_threshold: float = Field(
         default=0.3, description="健康分低于此阈值时从路由池摘除"
     )
@@ -116,7 +145,7 @@ class Settings(BaseSettings):
         default=30, description="Agent 请求超时（秒），超时触发降级"
     )
 
-    # ==================== Z-score 异常检测 ====================
+    # Z-score 异常检测
     zscore_window_size: int = Field(
         default=20, description="滑动窗口大小（最近 N 次请求）"
     )
@@ -127,8 +156,8 @@ class Settings(BaseSettings):
         default=10, description="异常检测后台任务间隔（秒）"
     )
 
-    # ==================== 预定义意图列表 ====================
-    # 这些意图标签贯穿意图识别、路由调度、Agent 执行全链路
+    # 预定义意图列表
+    # 这些意图标签用于意图识别、路由分发和Agent选择
     known_intents: List[str] = Field(
         default_factory=lambda: [
             "knowledge_retrieval",
@@ -137,7 +166,7 @@ class Settings(BaseSettings):
         ]
     )
 
-    # ==================== 意图描述（LLM few-shot 提示用） ====================
+    # 意图描述
     # 新增意图时同步在此添加描述，LLM 意图识别器自动生效
     intent_descriptions: Dict[str, str] = Field(
         default_factory=lambda: {
@@ -147,7 +176,7 @@ class Settings(BaseSettings):
         }
     )
 
-    # ==================== 意图关键词字典（关键词投票用） ====================
+    # 意图关键词字典
     # 每个意图对应一组关键词，命中后按匹配数加权
     intent_keywords: Dict[str, List[str]] = Field(
         default_factory=lambda: {
@@ -167,7 +196,7 @@ class Settings(BaseSettings):
         }
     )
 
-    # ==================== 意图示例文本（向量相似度用） ====================
+    # 意图示例文本
     # 用于在 ChromaDB 中构建意图 embedding 索引
     intent_examples: Dict[str, List[str]] = Field(
         default_factory=lambda: {

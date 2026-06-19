@@ -8,9 +8,9 @@
 """
 
 from app.agents.base import AgentContext, AgentResponse, BaseAgent
-from app.agents.retrieval_agent import RetrievalAgent
-from app.agents.summarize_agent import SummarizationAgent
-from app.agents.fallback_agent import FallbackAgent
+from app.agents.knowledge import RetrievalAgent
+from app.agents.summary import SummarizationAgent
+from app.agents.safety import FallbackAgent
 
 __all__ = [
     "AgentContext",

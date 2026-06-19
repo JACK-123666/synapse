@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 from redis.asyncio import Redis
 
 from app.config import Settings, get_settings
-from app.storage import get_redis
+from app.store import get_redis
 
 logger = logging.getLogger(__name__)
 
@@ -140,9 +140,7 @@ class ShortTermMemory:
         await self.clear(session_id)
 
 
-# ============================================================
 # 全局单例
-# ============================================================
 
 _instance: Optional[ShortTermMemory] = None
 
@@ -155,9 +153,7 @@ def get_short_term_memory() -> ShortTermMemory:
     return _instance
 
 
-# ============================================================
 # Token 估算辅助（模块级，无外部依赖）
-# ============================================================
 
 #: 匹配中文字符（含 CJK 统一汉字及扩展区、标点）
 _CJK_RE = re.compile(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]')

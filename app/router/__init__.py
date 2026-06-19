@@ -4,8 +4,8 @@
 根据意图和权重动态分发任务，失败时自动降级到备用 Agent 或兜底逻辑。
 """
 
-from app.router.registry import AgentRegistry, get_agent_registry
-from app.router.dispatcher import TaskDispatcher, get_task_dispatcher
+from app.router.pool import AgentRegistry, get_agent_registry
+from app.router.route import TaskDispatcher, get_task_dispatcher
 
 __all__ = [
     "AgentRegistry",

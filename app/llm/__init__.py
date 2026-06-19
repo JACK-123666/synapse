@@ -4,6 +4,6 @@
 所有调用均为异步（基于 httpx.AsyncClient）。
 """
 
-from app.llm.client import LLMClient, get_llm_client
+from app.llm.gateway import LLMClient, get_llm_client
 
 __all__ = ["LLMClient", "get_llm_client"]

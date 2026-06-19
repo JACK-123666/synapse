@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
 from fastapi import FastAPI
@@ -22,9 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.chat import router as chat_router
 from app.config import get_settings
 
-# ============================================================
 # 日志配置
-# ============================================================
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,9 +42,9 @@ logging.getLogger("chromadb").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
-# ============================================================
 # FastAPI 应用实例
-# ============================================================
+
+_app_settings = get_settings()
 
 app = FastAPI(
     title="Synapse · 智能对话平台",
@@ -68,8 +67,8 @@ app = FastAPI(
 全程有 Prometheus 盯着，哪个 Agent 慢了自动降权、摘除、恢复。
 """,
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url="/docs" if _app_settings.docs_enabled else None,
+    redoc_url="/redoc" if _app_settings.docs_enabled else None,
     swagger_ui_parameters={
         "defaultModelsExpandDepth": -1,
         "displayRequestDuration": True,
@@ -78,11 +77,12 @@ app = FastAPI(
     },
 )
 
-# CORS 中间件
+# CORS 中间件：allow_origins=* 时浏览器禁止 credentials，故按配置动态决定
+_cors_origins = [o.strip() for o in _app_settings.cors_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials="*" not in _cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -94,9 +94,7 @@ app.include_router(chat_router, prefix="")
 app.mount("/", StaticFiles(directory="app/static", html=True), name="static")
 
 
-# ============================================================
 # 启动事件
-# ============================================================
 
 @app.on_event("startup")
 async def startup() -> None:
@@ -113,6 +111,12 @@ async def startup() -> None:
     settings = get_settings()
     logger.info("=" * 60)
     logger.info("Synapse v1.0.0 正在启动...")
+    # 配置来源：docker 走 compose env_file 注入环境变量；本地开发走 .env 文件
+    logger.info(
+        "配置来源: %s",
+        "环境变量(compose env_file 注入)" if os.environ.get("LLM_PROVIDER")
+        else ".env 文件(本地开发)",
+    )
     logger.info("LLM Provider: %s, Model: %s",
                 settings.llm_provider, settings.llm_model)
     logger.info("LLM BaseURL: %s", settings.llm_base_url)
@@ -121,8 +125,8 @@ async def startup() -> None:
                 settings.deepseek_base_url, settings.deepseek_model)
     logger.info("=" * 60)
 
-    # 1. LLM 客户端
-    from app.llm.client import get_llm_client
+    # LLM 客户端
+    from app.llm.gateway import get_llm_client
     llm = get_llm_client()
     try:
         await llm.connect()
@@ -130,75 +134,80 @@ async def startup() -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("[SKIP] LLM 客户端初始化失败: %s", exc)
 
-    # 2. 预检 Redis
+    # 预检 Redis
     try:
-        from app.storage import get_redis
+        from app.store import get_redis
         redis = await get_redis()
         await redis.ping()
         logger.info("[OK] Redis 连接正常")
     except Exception as exc:  # noqa: BLE001
         logger.warning("[SKIP] Redis 不可用: %s", exc)
 
-    # 3. 预检 ChromaDB
+    # 预检 ChromaDB
     try:
-        from app.storage import get_chroma
+        from app.store import get_chroma
         chroma = get_chroma()
         chroma.heartbeat()
         logger.info("[OK] ChromaDB 连接正常")
     except Exception as exc:  # noqa: BLE001
         logger.warning("[SKIP] ChromaDB 不可用: %s", exc)
 
-    # 4. 初始化向量意图索引
+    # 初始化向量意图索引
     try:
-        from app.intent.fusion import get_intent_fusion
+        from app.intent.blend import get_intent_fusion
         fusion = get_intent_fusion()
         await fusion.initialize()
         logger.info("[OK] 意图向量索引已就绪")
     except Exception as exc:  # noqa: BLE001
         logger.warning("[SKIP] 意图向量索引初始化失败: %s", exc)
 
-    # 5. 注册 Agent
-    from app.router.registry import get_agent_registry
-    from app.agents.retrieval_agent import RetrievalAgent
-    from app.agents.summarize_agent import SummarizationAgent
-    from app.agents.fallback_agent import FallbackAgent
+    # 注册 Agent + 路由表
+    try:
+        from app.router.pool import get_agent_registry
+        from app.agents.knowledge import RetrievalAgent
+        from app.agents.summary import SummarizationAgent
+        from app.agents.safety import FallbackAgent
 
-    registry = get_agent_registry()
+        registry = get_agent_registry()
 
-    retrieval = RetrievalAgent()
-    summarize = SummarizationAgent()
-    fallback = FallbackAgent()
+        retrieval = RetrievalAgent()
+        summarize = SummarizationAgent()
+        fallback = FallbackAgent()
 
-    registry.register_agent(retrieval)
-    registry.register_agent(summarize)
-    registry.register_agent(fallback)
+        registry.register_agent(retrieval)
+        registry.register_agent(summarize)
+        registry.register_agent(fallback)
 
-    logger.info("[OK] 已注册 %d 个 Agent", len(registry.get_all_agents()))
+        logger.info("[OK] 已注册 %d 个 Agent", len(registry.get_all_agents()))
 
-    # 6. 注册路由表
-    # knowledge_retrieval → RetrievalAgent（主），FallbackAgent（备）
-    registry.register_route(
-        "knowledge_retrieval",
-        ["retrieval_agent", "fallback_agent"],
-    )
-    # summarize → SummarizationAgent（主），FallbackAgent（备）
-    registry.register_route(
-        "summarize",
-        ["summarize_agent", "fallback_agent"],
-    )
-    # small_talk → RetrievalAgent 兜底处理简单闲聊，FallbackAgent 兜底
-    registry.register_route(
-        "small_talk",
-        ["retrieval_agent", "fallback_agent"],
-    )
+        # knowledge_retrieval → RetrievalAgent（主），FallbackAgent（备）
+        registry.register_route(
+            "knowledge_retrieval",
+            ["retrieval_agent", "fallback_agent"],
+        )
+        # summarize → SummarizationAgent（主），FallbackAgent（备）
+        registry.register_route(
+            "summarize",
+            ["summarize_agent", "fallback_agent"],
+        )
+        # small_talk → RetrievalAgent 兜底处理简单闲聊，FallbackAgent 兜底
+        registry.register_route(
+            "small_talk",
+            ["retrieval_agent", "fallback_agent"],
+        )
 
-    logger.info("[OK] 路由表已注册")
+        logger.info("[OK] 路由表已注册")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[SKIP] Agent/路由注册失败: %s", exc)
 
-    # 7. 启动异常检测后台任务
-    from app.observability.anomaly_detector import get_anomaly_detector
-    detector = get_anomaly_detector()
-    await detector.start_recovery_loop()
-    logger.info("[OK] 异常检测后台任务已启动")
+    # 启动异常检测后台任务
+    try:
+        from app.observability.health import get_anomaly_detector
+        detector = get_anomaly_detector()
+        await detector.start_recovery_loop()
+        logger.info("[OK] 异常检测后台任务已启动")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[SKIP] 异常检测后台任务启动失败: %s", exc)
 
     logger.info("=" * 60)
     logger.info("Synapse 启动完成！")
@@ -207,9 +216,7 @@ async def startup() -> None:
     logger.info("=" * 60)
 
 
-# ============================================================
 # 关闭事件
-# ============================================================
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
@@ -218,7 +225,7 @@ async def shutdown() -> None:
 
     # 停止异常检测后台任务
     try:
-        from app.observability.anomaly_detector import get_anomaly_detector
+        from app.observability.health import get_anomaly_detector
         detector = get_anomaly_detector()
         await detector.stop_recovery_loop()
     except Exception as exc:  # noqa: BLE001
@@ -226,7 +233,7 @@ async def shutdown() -> None:
 
     # 关闭 LLM 客户端
     try:
-        from app.llm.client import get_llm_client
+        from app.llm.gateway import get_llm_client
         llm = get_llm_client()
         await llm.close()
     except Exception as exc:  # noqa: BLE001
@@ -234,14 +241,14 @@ async def shutdown() -> None:
 
     # 关闭 Redis
     try:
-        from app.storage import close_redis
+        from app.store import close_redis
         await close_redis()
     except Exception as exc:  # noqa: BLE001
         logger.warning("关闭 Redis 失败: %s", exc)
 
     # 关闭 ChromaDB
     try:
-        from app.storage import close_chroma
+        from app.store import close_chroma
         close_chroma()
     except Exception as exc:  # noqa: BLE001
         logger.warning("关闭 ChromaDB 失败: %s", exc)

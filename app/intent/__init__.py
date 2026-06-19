@@ -8,10 +8,10 @@
 融合策略：三路输出的置信度/得分归一化后加权求和，得分最高者为最终意图。
 """
 
-from app.intent.llm_intent import LLMIntentRecognizer
-from app.intent.vector_intent import VectorIntentRecognizer
-from app.intent.keyword_intent import KeywordIntentRecognizer
-from app.intent.fusion import IntentFusion, get_intent_fusion
+from app.intent.semantic import LLMIntentRecognizer
+from app.intent.vector import VectorIntentRecognizer
+from app.intent.keyword import KeywordIntentRecognizer
+from app.intent.blend import IntentFusion, get_intent_fusion
 
 __all__ = [
     "LLMIntentRecognizer",

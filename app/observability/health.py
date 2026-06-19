@@ -63,9 +63,7 @@ class AnomalyDetector:
         # 后台恢复任务句柄
         self._recovery_task: Optional[asyncio.Task] = None
 
-    # ----------------------------------------------------------
     # 注册 / 查询
-    # ----------------------------------------------------------
 
     def register_agent(self, agent_id: str) -> None:
         """注册一个新 Agent 到异常检测器。"""
@@ -103,9 +101,7 @@ class AnomalyDetector:
         with self._lock:
             return dict(self._states)
 
-    # ----------------------------------------------------------
     # 核心检测逻辑
-    # ----------------------------------------------------------
 
     def record_latency(self, agent_id: str, latency: float) -> bool:
         """记录一次请求耗时，执行 Z-score 检测并更新健康状态。
@@ -236,9 +232,7 @@ class AnomalyDetector:
 
         metrics.update_health_score(state.agent_id, state.health_score)
 
-    # ----------------------------------------------------------
     # 后台恢复任务
-    # ----------------------------------------------------------
 
     async def start_recovery_loop(self) -> None:
         """启动后台恢复检测任务。
@@ -293,9 +287,7 @@ class AnomalyDetector:
                     metrics.update_health_score(state.agent_id, state.health_score)
 
 
-# ============================================================
 # 全局单例
-# ============================================================
 
 _detector: Optional[AnomalyDetector] = None
 

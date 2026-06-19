@@ -12,9 +12,7 @@ from __future__ import annotations
 
 from prometheus_client import Counter, Gauge, Histogram
 
-# ============================================================
 # 指标定义
-# ============================================================
 
 #: 请求总数计数器，标签: agent_id（执行 Agent）、status（success/fallback/error）
 synapse_request_total = Counter(

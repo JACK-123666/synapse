@@ -14,9 +14,9 @@ import logging
 from typing import Dict, Optional, Tuple
 
 from app.config import Settings, get_settings
-from app.intent.keyword_intent import KeywordIntentRecognizer
-from app.intent.llm_intent import LLMIntentRecognizer
-from app.intent.vector_intent import VectorIntentRecognizer
+from app.intent.keyword import KeywordIntentRecognizer
+from app.intent.semantic import LLMIntentRecognizer
+from app.intent.vector import VectorIntentRecognizer
 from app.observability import metrics
 
 logger = logging.getLogger(__name__)
@@ -52,8 +52,7 @@ class IntentFusion:
             (意图标签, 融合置信度) 元组
             - 若所有路均失败，返回 ("small_talk", 1.0) 作为默认兜底
         """
-        # 1. 三路并行执行：LLM 最慢，向量和关键词不依赖 LLM 结果，
-        #    通过 asyncio.gather 并发跑，总耗时 = max(各路耗时) 而非 sum
+        # 三路并行执行，通过 asyncio.gather 并发跑
         llm_task = self._llm.recognize(message)
         vec_task = self._vector.recognize(message)
         kw_task = self._keyword.recognize(message)
@@ -79,12 +78,12 @@ class IntentFusion:
                 else:
                     keyword_result = result
 
-        # 2. 动态权重分配：任一识别器失败时，将其权重重新分配给其他识别器
+        # 动态权重分配：失败的路将其权重重新分配给健康路
         weights = self._compute_weights(
             bool(llm_result), bool(vector_result), bool(keyword_result)
         )
 
-        # 3. 加权融合
+        # 加权融合
         fused_scores = self._fuse(
             llm_result=llm_result,
             vector_result=vector_result,
@@ -92,7 +91,7 @@ class IntentFusion:
             weights=weights,
         )
 
-        # 4. 提取最高分意图
+        # 提取最高分意图
         if not fused_scores:
             logger.warning("融合器: 所有识别器均失败，使用默认意图 small_talk")
             metrics.record_intent_confidence("small_talk", 1.0)
@@ -199,9 +198,7 @@ class IntentFusion:
         return fused
 
 
-# ============================================================
 # 全局单例
-# ============================================================
 
 _instance: Optional[IntentFusion] = None
 

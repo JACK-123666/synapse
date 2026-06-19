@@ -16,7 +16,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from app.config import Settings, get_settings
-from app.storage import get_redis
+from app.store import get_redis
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ class UserProfileManager:
         if not user_id:
             return {}
 
-        from app.storage import get_redis
+        from app.store import get_redis
         redis = await get_redis()
         key = self._key(user_id)
         raw = await redis.get(key)
@@ -84,7 +84,7 @@ class UserProfileManager:
         self, user_id: str, profile: Dict[str, Any]
     ) -> None:
         """保存用户画像。"""
-        from app.storage import get_redis
+        from app.store import get_redis
         redis = await get_redis()
         key = self._key(user_id)
         await redis.set(key, json.dumps(profile, ensure_ascii=False))
@@ -152,9 +152,7 @@ class UserProfileManager:
         return "\n".join(parts)
 
 
-# ============================================================
 # 全局单例
-# ============================================================
 
 _instance: Optional[UserProfileManager] = None
 

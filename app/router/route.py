@@ -2,7 +2,7 @@
 
 根据意图找到可用 Agent 列表，按权重概率选择。
 调用失败时自动降级到下一个候选 Agent，直至 FallbackAgent。
-确保最终必须返回一个合法回复。
+所有路径最终返回一个合法回复。
 """
 
 from __future__ import annotations
@@ -16,8 +16,8 @@ from typing import List, Optional
 from app.agents.base import AgentContext, AgentResponse
 from app.config import Settings, get_settings
 from app.observability import metrics
-from app.observability.anomaly_detector import get_anomaly_detector
-from app.router.registry import AgentRegistry, get_agent_registry
+from app.observability.health import get_anomaly_detector
+from app.router.pool import AgentRegistry, get_agent_registry
 
 logger = logging.getLogger(__name__)
 
@@ -51,17 +51,17 @@ class TaskDispatcher:
         """
         intent = context.intent
 
-        # 1. 获取候选 Agent ID 列表（只含健康的）
+        # 获取候选 Agent ID 列表（只含健康的）
         candidates = self._registry.get_healthy_agents_for_intent(intent)
 
-        # 2. 如果该意图无可用 Agent，尝试使用 small_talk 路由
+        # 如果该意图无可用 Agent，尝试使用 small_talk 路由
         if not candidates and intent != "small_talk":
             logger.warning(
                 "分发: 意图 '%s' 无可用 Agent，回退到 small_talk", intent
             )
             candidates = self._registry.get_healthy_agents_for_intent("small_talk")
 
-        # 3. 确保兜底 Agent 在最后（绝对可用）
+        # 确保兜底 Agent 在最后
         if not candidates:
             candidates = ["fallback_agent"]
 
@@ -75,8 +75,10 @@ class TaskDispatcher:
             context.session_id, intent, candidates,
         )
 
-        # 4. 按权重排序后尝试
-        sorted_candidates = self._sort_by_weight(candidates)
+        # 按权重排序（兜底 Agent 永远最后，不参与排序）
+        main_candidates = [c for c in candidates if c != fallback_id]
+        sorted_candidates = self._sort_by_weight(main_candidates)
+        sorted_candidates.append(fallback_id)
 
         last_error: Optional[Exception] = None
         used_agent_id: Optional[str] = None
@@ -106,8 +108,7 @@ class TaskDispatcher:
                 metrics.record_request(agent_id, "error", 0.0)
                 continue
 
-        # 5. 绝对不应该走到这里（fallback_agent 绝不抛异常）
-        #    但为极端安全，返回硬编码兜底回复
+        # 绝对不应该走到这里（fallback_agent 绝不抛异常）        #    但为极端安全，返回硬编码兜底回复
         logger.critical("分发: 所有 Agent 均失败，返回硬编码兜底 (session=%s)",
                         context.session_id)
         return AgentResponse(
@@ -193,9 +194,7 @@ class TaskDispatcher:
         metrics.record_request(agent_id, "fallback", 0.0)
 
 
-# ============================================================
 # 全局单例
-# ============================================================
 
 _instance: Optional[TaskDispatcher] = None
 

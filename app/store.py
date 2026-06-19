@@ -16,9 +16,7 @@ from app.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
-# ============================================================
 # Redis 异步客户端单例
-# ============================================================
 
 _redis: Optional[Redis] = None
 
@@ -50,9 +48,7 @@ async def close_redis() -> None:
         logger.info("Redis 客户端已关闭")
 
 
-# ============================================================
 # ChromaDB 客户端单例
-# ============================================================
 
 _chroma: Optional[chromadb.api.ClientAPI] = None
 

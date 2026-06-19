@@ -17,34 +17,33 @@ import asyncio
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from prometheus_client import generate_latest
 from pydantic import BaseModel, Field
 
 from app.agents.base import AgentContext
-from app.intent.fusion import get_intent_fusion
-from app.memory.compressor import get_memory_compressor
-from app.memory.long_term import get_long_term_memory
-from app.memory.short_term import get_short_term_memory
-from app.memory.user_profile import get_user_profile_manager
-from app.router.dispatcher import get_task_dispatcher
-from app.router.registry import get_agent_registry
-from app.storage import get_chroma, get_redis
+from app.intent.blend import get_intent_fusion
+from app.memory.compress import get_memory_compressor
+from app.memory.archive import get_long_term_memory
+from app.memory.recent import get_short_term_memory
+from app.memory.profile import get_user_profile_manager
+from app.router.route import get_task_dispatcher
+from app.router.pool import get_agent_registry
+from app.store import get_chroma, get_redis
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-# ============================================================
 # 请求 / 响应模型
-# ============================================================
 
 class ChatRequest(BaseModel):
     """对话请求。
 
     填 session_id 和 message 就能用，user_id 选填。
     同一个 session_id 会共享短期记忆，实现多轮对话。
+    model 可选：临时指定本次请求使用的模型（不影响全局配置）。
     """
 
     session_id: str = Field(
@@ -58,6 +57,10 @@ class ChatRequest(BaseModel):
     user_id: Optional[str] = Field(
         default=None,
         description="可选。填了会记录你的偏好，下次回答更懂你",
+    )
+    model: Optional[str] = Field(
+        default=None,
+        description="可选。本次请求使用的模型名，覆盖全局配置（如 gpt-4o、deepseek-chat）",
     )
 
     model_config = {
@@ -93,24 +96,50 @@ class HealthResponse(BaseModel):
     modules: Dict[str, Any]
 
 
-# ============================================================
+# GET /chat — 返回聊天网页
+
+@router.get("/chat", include_in_schema=False)
+async def chat_page():
+    """聊天页面。"""
+    from fastapi.responses import FileResponse
+    return FileResponse("app/static/index.html")
+
+
 # POST /chat
-# ============================================================
 
 @router.post("/chat", response_model=ChatResponse, tags=["对话"], summary="发送消息")
-async def chat(request: ChatRequest) -> ChatResponse:
+async def chat(
+    request: ChatRequest,
+    x_web_search: str = Header(default="1", alias="X-Web-Search"),
+) -> ChatResponse:
     """发一条消息给 Synapse，拿到回复。
 
     背后自动完成：意图识别 → 记忆召回 → Agent 执行 → 记忆更新。
 
     同一个 session_id 连续调用即可多轮对话，系统会记住上下文。
     对话超过 8 轮会自动压缩历史，不额外消耗 Token。
+
+    Header X-Web-Search: 1/0 控制是否启用联网搜索。
     """
+    web_search_enabled = x_web_search == "1"
     session_id = request.session_id
     message = request.message
     user_id = request.user_id
 
-    # ---- 1. 意图识别 ----
+    # 模型临时覆盖
+    saved_model: Optional[str] = None
+    if request.model:
+        from app.llm.gateway import get_llm_client
+        llm_cl = get_llm_client()
+        saved_config = llm_cl.get_config()
+        saved_model = saved_config.get("model")
+        llm_cl.switch_model(model=request.model)
+        logger.info(
+            "[API] session=%s 临时切换模型: %s -> %s",
+            session_id, saved_model, request.model,
+        )
+
+    # 意图识别
     fusion = get_intent_fusion()
     intent, confidence = await fusion.recognize(message)
     logger.info(
@@ -118,7 +147,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         session_id, message[:100], intent, confidence,
     )
 
-    # ---- 2. 组装 AgentContext ----
+    # 组装 AgentContext
     short_mem = get_short_term_memory()
     long_mem = get_long_term_memory()
     profile_mgr = get_user_profile_manager()
@@ -144,14 +173,14 @@ async def chat(request: ChatRequest) -> ChatResponse:
         short_term_memory=short_term_msgs,
         long_term_recall=recall,
         user_profile_context=profile_context,
+        web_search=web_search_enabled,
     )
 
-    # ---- 3. 路由调度 ----
+    # 路由调度
     dispatcher = get_task_dispatcher()
     response = await dispatcher.dispatch(context)
 
-    # ---- 4. 记忆更新 ----
-    # 追加用户消息和助手回复到短期记忆
+    # 记忆更新 — 追加用户消息和助手回复到短期记忆
     try:
         await short_mem.append(session_id, "user", message)
         await short_mem.append(session_id, "assistant", response.reply)
@@ -180,7 +209,12 @@ async def chat(request: ChatRequest) -> ChatResponse:
     except Exception as exc:  # noqa: BLE001
         logger.warning("[API] 记忆压缩检查失败: %s", exc)
 
-    # ---- 5. 返回 ----
+    # 恢复模型
+    if saved_model is not None:
+        from app.llm.gateway import get_llm_client
+        get_llm_client().switch_model(model=saved_model)
+
+    # 返回
     agent_used = response.metadata.get("agent_id", "unknown")
     return ChatResponse(
         reply=response.reply,
@@ -190,9 +224,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
     )
 
 
-# ============================================================
 # GET /health
-# ============================================================
 
 @router.get("/health", response_model=HealthResponse, tags=["系统"], summary="健康检查")
 async def health() -> HealthResponse:
@@ -220,7 +252,7 @@ async def health() -> HealthResponse:
 
     # LLM（轻量检查：仅验证客户端存在）
     try:
-        from app.llm.client import get_llm_client
+        from app.llm.gateway import get_llm_client
         llm = get_llm_client()
         if llm.http is not None:
             modules["llm"] = "connected"
@@ -242,9 +274,95 @@ async def health() -> HealthResponse:
     return HealthResponse(status=status, modules=modules)
 
 
-# ============================================================
+# GET /models — 查看当前 LLM 配置
+
+class ModelInfo(BaseModel):
+    """LLM 模型信息。"""
+    provider: str
+    model: str
+    base_url: str
+    has_api_key: bool
+    embedding_api_key_set: bool
+    timeout_s: int
+    runtime_overrides: List[str] = Field(default_factory=list)
+
+
+@router.get("/models", response_model=ModelInfo, tags=["系统"], summary="查看 LLM 配置")
+async def get_models() -> ModelInfo:
+    """返回当前生效的 LLM 提供商、模型、base_url 等信息。"""
+    from app.llm.gateway import get_llm_client
+    llm = get_llm_client()
+    cfg = llm.get_config()
+    return ModelInfo(
+        provider=cfg["provider"],
+        model=cfg["model"],
+        base_url=cfg["base_url"],
+        has_api_key=cfg["api_key_prefix"] != "(empty)",
+        embedding_api_key_set=cfg.get("embedding_api_key_set", False),
+        timeout_s=cfg["timeout_s"],
+        runtime_overrides=list(llm._runtime.keys()) if hasattr(llm, "_runtime") else [],
+    )
+
+
+# POST /models/switch — 运行时切换模型
+
+class ModelSwitchRequest(BaseModel):
+    """模型切换请求。只需填你要改的字段，未填的不变。"""
+    provider: Optional[str] = Field(
+        default=None, description="LLM 提供商: openai / deepseek / claude"
+    )
+    model: Optional[str] = Field(
+        default=None, description="模型名（如 gpt-4o、deepseek-chat）"
+    )
+    api_key: Optional[str] = Field(
+        default=None, description="新的 API 密钥"
+    )
+    base_url: Optional[str] = Field(
+        default=None, description="新的 base_url"
+    )
+
+
+@router.post("/models/switch", response_model=ModelInfo, tags=["系统"],
+             summary="运行时切换 LLM 模型")
+async def switch_model(req: ModelSwitchRequest) -> ModelInfo:
+    """运行时切换 LLM 提供商 / 模型 / 密钥，无需重启。
+
+    只填你要改的字段；未填的保持当前值。
+    传空字符串 "" 可清空某个运行时覆盖，回退到 .env 配置。
+    切换后立即生效，下一次 /chat 使用新配置。
+    """
+    from app.llm.gateway import get_llm_client
+    llm = get_llm_client()
+    cfg = llm.switch_model(
+        provider=req.provider,
+        model=req.model,
+        api_key=req.api_key,
+        base_url=req.base_url,
+    )
+    return ModelInfo(
+        provider=cfg["provider"],
+        model=cfg["model"],
+        base_url=cfg["base_url"],
+        has_api_key=cfg["api_key_prefix"] != "(empty)",
+        embedding_api_key_set=cfg.get("embedding_api_key_set", False),
+        timeout_s=cfg["timeout_s"],
+        runtime_overrides=list(llm._runtime.keys()) if hasattr(llm, "_runtime") else [],
+    )
+
+
+# POST /models/reset — 重置模型配置
+
+@router.post("/models/reset", response_model=ModelInfo, tags=["系统"],
+             summary="重置 LLM 配置")
+async def reset_model() -> ModelInfo:
+    """清空所有运行时覆盖，回退到 .env / 环境变量配置。"""
+    from app.llm.gateway import get_llm_client
+    llm = get_llm_client()
+    llm.reset_runtime()
+    return await get_models()
+
+
 # GET /metrics
-# ============================================================
 
 @router.get("/metrics", tags=["系统"], summary="监控指标")
 async def metrics():

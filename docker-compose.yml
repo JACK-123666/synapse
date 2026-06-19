@@ -6,8 +6,6 @@
 # 查看日志: docker-compose logs -f synapse-api
 # ============================================================
 
-version: "3.9"
-
 services:
   # ----------------------------------------------------------
   # FastAPI 应用
@@ -19,17 +17,19 @@ services:
     container_name: synapse-api
     ports:
       - "8000:8000"
+    # .env 整体注入为环境变量（避免裸 ${VAR} 在 .env 缺键时注入空串覆盖）
+    env_file:
+      - .env
     environment:
+      # 此三项强制覆盖 env_file 同名键（优先级: environment > env_file），如需改端口须改这里
       - REDIS_URL=redis://redis:6379/0
       - CHROMA_HOST=chromadb
       - CHROMA_PORT=8000
-    volumes:
-      - ./.env:/app/.env:ro
     depends_on:
       redis:
         condition: service_healthy
       chromadb:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - synapse-network
@@ -45,8 +45,10 @@ services:
   redis:
     image: redis:7-alpine
     container_name: synapse-redis
-    ports:
-      - "6379:6379"
+    # 不暴露到宿主机：仅容器网络内 synapse-api 访问（Redis 无密码，对外暴露有风险）
+    # 如需本地调试，临时取消下面两行注释：
+    # ports:
+    #   - "6379:6379"
     volumes:
       - redis-data:/data
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
@@ -63,16 +65,25 @@ services:
   # ChromaDB - 向量数据库（长期记忆 + 知识库）
   # ----------------------------------------------------------
   chromadb:
-    image: chromadb/chroma:latest
+    image: chromadb/chroma:0.4.24  # 锁定版本：healthcheck 依赖容器内 python，chromadb/chroma:latest 已移除 Python，升级 tag 前须改 healthcheck
     container_name: synapse-chromadb
-    ports:
-      - "8001:8000"
+    # 不暴露到宿主机：仅容器网络内 synapse-api 访问（容器内端口 8000）
+    # 如需本地调试，临时取消下面两行注释：
+    # ports:
+    #   - "8001:8000"
     volumes:
       - chroma-data:/chroma/chroma
     environment:
       - IS_PERSISTENT=TRUE
       - ANONYMIZED_TELEMETRY=FALSE
       - ALLOW_RESET=TRUE
+    healthcheck:
+      # 依赖容器内 python 解释器（0.4.24 自带；latest 已移除 python，升级前须改）
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/heartbeat', timeout=4).read()"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
     restart: unless-stopped
     networks:
       - synapse-network
@@ -81,7 +92,7 @@ services:
   # Prometheus - 监控指标采集
   # ----------------------------------------------------------
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.0.0  # 锁定版本；如需升级，先 docker pull 验证新 tag 再改
     container_name: synapse-prometheus
     ports:
       - "9090:9090"

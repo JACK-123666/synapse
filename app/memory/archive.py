@@ -17,8 +17,8 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from app.config import Settings, get_settings
-from app.llm.client import LLMError, get_llm_client
-from app.storage import get_chroma
+from app.llm.gateway import LLMError, get_llm_client
+from app.store import get_chroma
 
 logger = logging.getLogger(__name__)
 
@@ -253,9 +253,7 @@ class LongTermMemory:
         return self._parse_results(results)
 
 
-# ============================================================
 # 全局单例
-# ============================================================
 
 _instance: Optional[LongTermMemory] = None
 

@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 
 from app.config import Settings, get_settings
 from app.agents.base import BaseAgent
-from app.observability.anomaly_detector import (
+from app.observability.health import (
     AnomalyDetector,
     get_anomaly_detector,
 )
@@ -39,9 +39,7 @@ class AgentRegistry:
         #: 异常检测器引用
         self._detector: AnomalyDetector = get_anomaly_detector()
 
-    # ----------------------------------------------------------
     # 注册
-    # ----------------------------------------------------------
 
     def register_agent(self, agent: BaseAgent) -> None:
         """注册一个 Agent。
@@ -85,9 +83,7 @@ class AgentRegistry:
             "注册表: 已注册路由 '%s' -> %s", intent, agent_ids
         )
 
-    # ----------------------------------------------------------
     # 查询
-    # ----------------------------------------------------------
 
     def get_agent(self, agent_id: str) -> Optional[BaseAgent]:
         """根据 ID 获取 Agent 实例。"""
@@ -164,9 +160,7 @@ class AgentRegistry:
         return status
 
 
-# ============================================================
 # 全局单例
-# ============================================================
 
 _instance: Optional[AgentRegistry] = None
 

@@ -13,9 +13,9 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from app.config import Settings, get_settings
-from app.llm.client import LLMError, get_llm_client
-from app.memory.long_term import LongTermMemory, get_long_term_memory
-from app.memory.short_term import ShortTermMemory, get_short_term_memory
+from app.llm.gateway import LLMError, get_llm_client
+from app.memory.archive import LongTermMemory, get_long_term_memory
+from app.memory.recent import ShortTermMemory, get_short_term_memory
 from app.observability import metrics
 
 logger = logging.getLogger(__name__)
@@ -85,23 +85,23 @@ class MemoryCompressor:
         Returns:
             生成的摘要文本，压缩失败时返回 None
         """
-        # 1. 取出短期记忆消息
+        # 取出短期记忆消息
         messages = await self._short_term.get_messages(session_id)
         if not messages:
             logger.debug("压缩: session=%s 无短期记忆，跳过", session_id)
             return None
 
-        # 2. 拼接对话文本
+        # 拼接对话文本
         dialogue_text = self._format_dialogue(messages)
 
-        # 3. 调用 LLM 生成摘要
+        # 调用 LLM 生成摘要
         try:
             summary = await self._generate_summary(dialogue_text)
         except LLMError as exc:
             logger.error("压缩: session=%s LLM 摘要生成失败: %s", session_id, exc)
             return None
 
-        # 4. 存入长期记忆
+        # 存入长期记忆
         try:
             await self._long_term.store_summary(
                 session_id=session_id,
@@ -112,10 +112,10 @@ class MemoryCompressor:
             logger.error("压缩: session=%s 长期记忆存储失败: %s", session_id, exc)
             return None
 
-        # 5. 清空短期记忆
+        # 清空短期记忆
         await self._short_term.clear(session_id)
 
-        # 6. 记录指标
+        # 记录指标
         metrics.record_compression()
 
         logger.info(
@@ -186,9 +186,7 @@ class MemoryCompressor:
         return summary.strip()
 
 
-# ============================================================
 # 全局单例
-# ============================================================
 
 _instance: Optional[MemoryCompressor] = None
 

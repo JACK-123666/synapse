@@ -9,10 +9,10 @@
 压缩后存入长期记忆并清空短期记忆，降低 Token 消耗。
 """
 
-from app.memory.short_term import ShortTermMemory, get_short_term_memory
-from app.memory.long_term import LongTermMemory, get_long_term_memory
-from app.memory.user_profile import UserProfileManager, get_user_profile_manager
-from app.memory.compressor import MemoryCompressor, get_memory_compressor
+from app.memory.recent import ShortTermMemory, get_short_term_memory
+from app.memory.archive import LongTermMemory, get_long_term_memory
+from app.memory.profile import UserProfileManager, get_user_profile_manager
+from app.memory.compress import MemoryCompressor, get_memory_compressor
 
 __all__ = [
     "ShortTermMemory",

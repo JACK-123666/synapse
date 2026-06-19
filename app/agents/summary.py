@@ -12,7 +12,7 @@ import logging
 from typing import Any, Dict, List
 
 from app.agents.base import AgentContext, AgentResponse, BaseAgent
-from app.llm.client import LLMError, get_llm_client
+from app.llm.gateway import LLMError, get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ class SummarizationAgent(BaseAgent):
         Returns:
             包含结构化摘要的响应
         """
-        # 1. 收集待摘要内容
+        # 收集待摘要内容
         content_to_summarize = self._gather_content(context)
 
         if not content_to_summarize:
@@ -47,7 +47,7 @@ class SummarizationAgent(BaseAgent):
                 metadata={"mode": "summarize", "content_length": 0},
             )
 
-        # 2. 构建摘要 prompt
+        # 构建摘要 prompt
         system_prompt = (
             "你是一个专业的摘要专家。请对提供的对话/文本生成结构化摘要，包含以下部分：\n"
             "1. 【话题】讨论的主题\n"
@@ -59,7 +59,7 @@ class SummarizationAgent(BaseAgent):
 
         user_prompt = f"请总结以下内容:\n\n{content_to_summarize}"
 
-        # 3. 调用 LLM
+        # 调用 LLM
         try:
             llm = get_llm_client()
             reply = await llm.chat(

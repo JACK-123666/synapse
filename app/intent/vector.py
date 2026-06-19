@@ -13,8 +13,7 @@ import logging
 from typing import Dict, List, Optional
 
 from app.config import Settings, get_settings
-from app.llm.client import LLMError, get_llm_client
-from app.storage import get_chroma
+from app.store import get_chroma
 
 logger = logging.getLogger(__name__)
 
@@ -115,15 +114,9 @@ class VectorIntentRecognizer:
         if not self._initialized:
             await self.initialize()
 
-        # 获取用户消息的 embedding
-        try:
-            llm = get_llm_client()
-            query_embedding = await llm.embed(message)
-        except LLMError as exc:
-            logger.warning("向量意图识别: embedding 失败: %s", exc)
-            return None
-
-        # 在 ChromaDB 中查询相似意图
+        # 在 ChromaDB 中查询相似意图：用 collection 默认 embedding 函数 embed 查询文本，
+        # 与初始化写入（collection.add(documents=)）使用同一 embedding 函数，保证维度一致。
+        # 不依赖 LLM embedding API，DeepSeek 等不支持 embedding 的 provider 也能工作。
         try:
             client = get_chroma()
             collection = client.get_collection(
@@ -131,7 +124,7 @@ class VectorIntentRecognizer:
             )
             results = await asyncio.to_thread(
                 collection.query,
-                query_embeddings=[query_embedding],
+                query_texts=[message],
                 n_results=3,
                 include=["metadatas", "distances"],
             )

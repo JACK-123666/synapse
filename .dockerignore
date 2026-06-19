@@ -1,0 +1,58 @@
+# ============================================================
+# Synapse .dockerignore — 精简构建上下文，避免敏感文件入镜像
+# ============================================================
+
+# 版本控制（体积大，无需入镜像）
+.git
+.gitignore
+.gitattributes
+
+# 环境变量与凭证（含 API 密钥，绝不打包进镜像层）
+.env
+.env.*
+!.env.example
+.envrc
+*.pem
+*.key
+secrets/
+.aws/
+
+# Python 缓存与虚拟环境
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# 本地数据/数据库文件
+*.sqlite3
+*.db
+
+# IDE / 操作系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docker 自身文件（无需复制进镜像）
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# 监控配置（由 prometheus 服务单独挂载，app 镜像不需要）
+prometheus.yml
+
+# 文档（运行时无需）
+README.md
+LICENSE
+*.md
+
+# Claude / 工具产物
+.claude/

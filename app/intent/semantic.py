@@ -14,7 +14,7 @@ import re
 from typing import Dict, Optional
 
 from app.config import Settings, get_settings
-from app.llm.client import LLMError, get_llm_client
+from app.llm.gateway import LLMError, get_llm_client
 
 logger = logging.getLogger(__name__)
 

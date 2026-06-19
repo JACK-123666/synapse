@@ -43,6 +43,7 @@ class AgentContext(BaseModel):
     short_term_memory: List[Dict[str, Any]] = Field(default_factory=list)
     long_term_recall: List[Dict[str, Any]] = Field(default_factory=list)
     user_profile_context: str = ""
+    web_search: bool = True  # 是否允许联网搜索
 
     model_config = {"arbitrary_types_allowed": True}
 
