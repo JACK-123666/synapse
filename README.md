@@ -3,151 +3,151 @@
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-带意图识别和记忆管理的多 Agent 对话服务。FastAPI + Redis + ChromaDB，Docker 一键部署。
+A multi-agent conversational service with intent recognition and memory management. FastAPI + Redis + ChromaDB, one-command Docker deployment. (中文版见 [README.zh.md](README.zh.md))
 
-## 为什么？
+## Why?
 
-LLM 对话上生产会碰到三个问题：
+Putting an LLM chat loop into production surfaces three problems:
 
-**意图模糊。** 用户说"那个怎么弄"，你得判断他在查文档还是闲聊。单靠 LLM 分类慢且贵，单靠关键词不准。三路融合——LLM 语义 + 向量相似度 + 关键词投票——某路挂了自动把权重分给其他路，保证意图识别不成为单点。
+**Ambiguous intent.** When a user says "how does that work?", you have to decide whether they're asking about documentation or making small talk. Pure LLM classification is slow and expensive; pure keyword matching is inaccurate. So we fuse three signals — LLM semantics + vector similarity + keyword voting — and when one path fails its weight is automatically redistributed to the survivors. Intent recognition is never a single point of failure.
 
-**Token 膨胀。** 聊 20 轮把全部历史塞进 prompt，又贵又慢。只保留最近 N 轮会丢掉跨会话记忆——三天前聊过"向量数据库"，今天问"它的写入性能"，系统应该知道"它"指什么。做法是 Redis 存最近 10 轮，超阈值后台异步压成摘要存 ChromaDB，新消息进来先召回相似历史拼入 prompt。
+**Token bloat.** Stuffing all 20 turns of history into the prompt gets slow and expensive, but keeping only the last N turns loses cross-session memory: you discussed "vector databases" three days ago, and today you ask "how fast are writes?" — the system should know what "it" refers to. The approach: Redis holds the last 10 turns; past that threshold a background task asynchronously compresses them into a summary stored in ChromaDB; on each new message, similar history is recalled and spliced into the prompt.
 
-**Agent 会挂。** 调 API 遇到 429、超时、自己写的逻辑 bug——任何一个炸了用户看到 500。每个意图绑一串 Agent，主挂切备，备挂切兜底。同时用 Z-score 监控延迟——超 μ+3σ 自动降权摘除，恢复后自动拉回，半夜 OpenAI 抽了系统自己切到 DeepSeek，好了再切回来。
+**Agents fail.** A 429, a timeout, or a bug in your own logic — any of them turns into a 500 for the user. Each intent binds to a chain of agents: if the primary fails, switch to the backup; if the backup fails, fall through to a fallback. At the same time, Z-score latency monitoring flags anything beyond μ+3σ, auto-downweights it out of rotation, and restores it once it recovers. When OpenAI hiccups at 3 a.m., the system switches itself to DeepSeek — and back again when it's healthy.
 
-## 快速开始
+## Quick Start
 
 ```bash
 git clone https://github.com/JACK-123666/synapse.git && cd synapse
-cp .env.example .env      # 填入 LLM_API_KEY
+cp .env.example .env      # fill in LLM_API_KEY
 docker compose up -d
 ```
 
-发一条消息试试：
+Try a message:
 
 ```bash
 curl -s -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
-  -d '{"session_id":"demo","message":"什么是向量数据库"}'
+  -d '{"session_id":"demo","message":"What is a vector database?"}'
 ```
 
-浏览器打开 `http://localhost:8000/chat` 有对话界面，`http://localhost:8000/docs` 有 Swagger。
+Open `http://localhost:8000/chat` for the chat UI, or `http://localhost:8000/docs` for Swagger.
 
-## 架构
+## Architecture
 
-一条请求经过 6 个步骤：
+A request flows through 6 steps:
 
 ```text
-消息 → 意图识别 → 记忆召回 → 路由分发 → Agent 执行 → 记忆更新 → 返回
+message → intent recognition → memory recall → routing → agent execution → memory update → reply
 ```
 
-### 意图识别
+### Intent Recognition
 
-三路融合，加权投票：
+Three-way fusion with weighted voting:
 
-| 方法 | 权重 | 说明 |
-|------|------|------|
-| LLM 语义 | 0.5 | few-shot prompt，最准确 |
-| 向量匹配 | 0.3 | embedding 与意图示例做相似度比对 |
-| 关键词 | 0.2 | 预置词典命中计分 |
+| Method            | Weight | How it works                                         |
+|-------------------|--------|------------------------------------------------------|
+| LLM semantics     | 0.5    | few-shot prompt, most accurate                       |
+| Vector match      | 0.3    | embedding similarity against intent examples         |
+| Keywords          | 0.2    | scoring from a preset dictionary                     |
 
-任一路失败时权重自动重分配，三路全挂则返回默认意图。
+If any path fails, its weight is redistributed automatically. If all three fail, a default intent is returned.
 
-### 路由与降级
+### Routing & Failover
 
-每个意图绑定一串 Agent，按健康分排序。主 Agent 失败自动降级到备用，备用失败走兜底。兜底 Agent 不调 LLM，返回预设文本，保证任何情况都有回复。
+Each intent binds a chain of agents ordered by health score. A primary-agent failure degrades to the backup, and a backup failure falls through to the fallback. The fallback agent never calls the LLM — it returns a preset reply, guaranteeing a response in every situation.
 
-Agent 的健康分由 Z-score 滑动窗口动态计算——最近 20 次请求的延迟分布，超 μ+3σ 视为异常，权重衰减至 0.3 以下摘除，后台定时重检恢复。
+An agent's health score comes from a Z-score sliding window over the last 20 requests' latency distribution: anything beyond μ+3σ is flagged anomalous, its weight decays below 0.3 and it's removed from rotation, and a background task periodically re-checks and restores it.
 
-### 记忆
+### Memory
 
-- **短期** (Redis)：当前会话的最近 N 轮对话，TTL 24 小时
-- **长期** (ChromaDB)：对话摘要的向量索引，新消息进入时召回相似历史，拼入 prompt
-- **压缩**：会话超过 8 轮后台触发，LLM 将短期记忆压缩为摘要存入 ChromaDB，清空 Redis 释放 token 预算
+- **Short-term** (Redis): the last N turns of the current session, 24h TTL
+- **Long-term** (ChromaDB): a vector index of conversation summaries; new messages recall similar history and splice it into the prompt
+- **Compression**: when a session exceeds 8 turns, a background task compresses short-term memory into a summary in ChromaDB and clears Redis to free up the token budget
 
-### 联网搜索
+### Web Search
 
-知识库中未命中时，自动通过 DuckDuckGo 搜索并注入结果到 prompt。前端开关可控。
+When the knowledge base misses, DuckDuckGo is searched automatically and the results are injected into the prompt. Toggleable from the frontend.
 
-## 配置
+## Configuration
 
-关键环境变量，全部在 `.env` 中设置：
+Key environment variables, all set in `.env`:
 
 ```text
 LLM_PROVIDER=deepseek       # openai / claude / deepseek
-LLM_API_KEY=sk-xxx          # 必填
-LLM_MODEL=gpt-4o-mini       # provider=openai 时生效
+LLM_API_KEY=sk-xxx          # required
+LLM_MODEL=gpt-4o-mini       # effective when provider=openai
 DEEPSEEK_MODEL=deepseek-chat
 LLM_BASE_URL=https://api.openai.com/v1
 
-# 可选：embedding 专用密钥（DeepSeek 不支持 embedding，需单独配）
+# Optional: a dedicated embedding key (DeepSeek doesn't support embedding)
 EMBEDDING_API_KEY=
 EMBEDDING_BASE_URL=
 
-# 内存与压缩
+# Memory & compression
 SHORT_TERM_MAX_ROUNDS=10
 SUMMARY_TRIGGER_ROUNDS=8
 
-# 意图权重
+# Intent weights
 INTENT_LLM_WEIGHT=0.5
 INTENT_VECTOR_WEIGHT=0.3
 INTENT_KEYWORD_WEIGHT=0.2
 ```
 
-更多参数见 `.env.example`。
+See `.env.example` for the full list.
 
-## 目录
+## Project Structure
 
 ```
 app/
-├── main.py                 FastAPI 入口，启动时注册 Agent 和路由
-├── config.py               所有可配参数
-├── store.py                Redis / ChromaDB 连接单例
+├── main.py                 FastAPI entry, registers agents and routes on startup
+├── config.py               All configurable parameters
+├── store.py                Redis / ChromaDB connection singletons
 ├── api/chat.py             /chat /health /models /metrics
-├── llm/gateway.py          LLM 统一客户端（支持运行时切换）
+├── llm/gateway.py          Unified LLM client (runtime switching supported)
 ├── intent/
-│   ├── blend.py            三路融合
-│   ├── semantic.py         LLM 语义分类
-│   ├── keyword.py          关键词投票
-│   └── vector.py           向量相似度
+│   ├── blend.py            Three-way fusion
+│   ├── semantic.py         LLM semantic classification
+│   ├── keyword.py          Keyword voting
+│   └── vector.py           Vector similarity
 ├── router/
-│   ├── pool.py             Agent 注册表
-│   └── route.py            分发与降级
+│   ├── pool.py             Agent registry
+│   └── route.py            Dispatch & failover
 ├── agents/
-│   ├── base.py             基类
-│   ├── knowledge.py        知识检索
-│   ├── summary.py          摘要
-│   └── safety.py           兜底
+│   ├── base.py             Base class
+│   ├── knowledge.py        Knowledge retrieval
+│   ├── summary.py          Summarization
+│   └── safety.py           Fallback
 ├── memory/
-│   ├── recent.py           短期记忆 (Redis)
-│   ├── archive.py          长期记忆 (ChromaDB)
-│   ├── compress.py         压缩调度
-│   └── profile.py          用户画像
+│   ├── recent.py           Short-term memory (Redis)
+│   ├── archive.py          Long-term memory (ChromaDB)
+│   ├── compress.py         Compression scheduler
+│   └── profile.py          User profile
 ├── observability/
-│   ├── health.py           异常检测与自愈
-│   └── metrics.py          Prometheus 指标
+│   ├── health.py           Anomaly detection & self-healing
+│   └── metrics.py          Prometheus metrics
 ├── tools/
-│   └── search.py           联网搜索
-└── _singleton.py           工具函数
+│   └── search.py           Web search
+└── _singleton.py           Utilities
 ```
 
-## 扩展 Agent
+## Extending with a New Agent
 
-继承 `BaseAgent`，实现 `execute()` 方法：
+Subclass `BaseAgent` and implement `execute()`:
 
 ```python
 from app.agents.base import BaseAgent, AgentContext, AgentResponse
 
 class MyAgent(BaseAgent):
     agent_id = "my_agent"
-    description = "自定义 Agent"
+    description = "A custom agent"
 
     async def execute(self, context: AgentContext) -> AgentResponse:
-        # 你的逻辑
+        # your logic
         return AgentResponse(reply="done", metadata={})
 ```
 
-然后在 `main.py` 启动事件中注册并绑定路由即可。
+Then register and bind it to a route in the `main.py` startup event.
 
 ## License
 
