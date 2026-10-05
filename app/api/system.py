@@ -75,14 +75,12 @@ async def health() -> HealthResponse:
     except Exception as exc:  # noqa: BLE001
         modules["database"] = f"error: {exc}"
 
-    # LLM（轻量检查：仅验证客户端存在）
+    # LLM（轻量检查：配置是否可用，不发起真实调用）
     try:
-        from app.llm.gateway import get_llm_client
-        llm = get_llm_client()
-        if llm.http is not None:
-            modules["llm"] = "connected"
-        else:
-            modules["llm"] = "not initialized"
+        from app.llm.config import get_llm_config
+
+        cfg = get_llm_config().snapshot()
+        modules["llm"] = f"configured: {cfg['provider']}/{cfg.get('model')}"
     except Exception as exc:  # noqa: BLE001
         modules["llm"] = f"error: {exc}"
 

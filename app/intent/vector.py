@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from app.config import Settings, get_settings
 from app.intent.catalog import IntentCatalog, get_intent_catalog
@@ -36,10 +36,14 @@ class VectorIntentRecognizer:
         # 意图示例从动态意图目录读取（默认值即 config.intent_examples）
         self._catalog: IntentCatalog = catalog or get_intent_catalog()
         self._initialized: bool = False
+        #: 意图示例集合句柄（懒加载 + 缓存，避免每次识别都发起 HTTP 往返）
+        self._collection: Optional[Any] = None
 
     async def refresh(self) -> None:
         """意图目录变化后重建索引（插件启停、热重载时调用）。"""
         self._initialized = False
+        # 集合会被删除重建，旧句柄作废
+        self._collection = None
         await self.initialize()
 
     async def initialize(self) -> None:
@@ -60,6 +64,8 @@ class VectorIntentRecognizer:
 
     def _init_sync(self) -> None:
         """同步执行 ChromaDB 初始化（在 asyncio.to_thread 中调用）。"""
+        # 本方法可能删除并重建集合，缓存的旧句柄必须作废
+        self._collection = None
         client = get_chroma()
         version = self._catalog.version()
         try:
@@ -119,6 +125,18 @@ class VectorIntentRecognizer:
         except Exception as exc:  # noqa: BLE001
             logger.error("向量意图识别器: 索引意图示例失败: %s", exc)
 
+    def _collection_sync(self):
+        """获取意图示例集合句柄（同步，必须放在 asyncio.to_thread 中调用）。
+
+        get_collection 是一次真实的 HTTP 往返（Chroma 通常是独立服务），
+        直接写在协程里会阻塞整个事件循环；句柄本身缓存复用。
+        """
+        if self._collection is None:
+            self._collection = get_chroma().get_collection(
+                name=self._settings.chroma_collection_intents
+            )
+        return self._collection
+
     async def recognize(self, message: str) -> Optional[Dict[str, float]]:
         """识别用户消息的意图（向量相似度）。
 
@@ -138,10 +156,7 @@ class VectorIntentRecognizer:
         # 与初始化写入（collection.add(documents=)）使用同一 embedding 函数，保证维度一致。
         # 不依赖 LLM embedding API，DeepSeek 等不支持 embedding 的 provider 也能工作。
         try:
-            client = get_chroma()
-            collection = client.get_collection(
-                name=self._settings.chroma_collection_intents
-            )
+            collection = await asyncio.to_thread(self._collection_sync)
             results = await asyncio.to_thread(
                 collection.query,
                 query_texts=[message],
@@ -150,6 +165,8 @@ class VectorIntentRecognizer:
             )
         except Exception as exc:  # noqa: BLE001
             logger.error("向量意图识别: ChromaDB 查询失败: %s", exc)
+            # 句柄可能已失效（集合被重建 / 服务重启），下次调用重新获取
+            self._collection = None
             return None
 
         return self._parse_results(results)

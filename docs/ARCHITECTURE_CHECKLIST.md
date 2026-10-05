@@ -59,7 +59,8 @@
 | 文件 | 职责 |
 |------|------|
 | `app/llm/factory.py` | 按配置创建并缓存 `ChatOpenAI`（OpenAI / DeepSeek）、`ChatAnthropic`（Claude）、`OpenAIEmbeddings` 或本地 ONNX Embeddings |
-| `app/llm/gateway.py` | `LLMClient` 原有公开方法全部保留；`LLM_BACKEND=langchain`（默认）时委托工厂，`httpx` 时走原实现 |
+| `app/llm/config.py` | `LLMRuntimeConfig`：运行时覆盖 > 环境变量；供模型工厂读取 |
+| `app/llm/gateway.py` | `LLMClient`：chat / embed 统一入口，全部委托工厂（单一 LangChain 后端，原 httpx 实现已移除） |
 | `app/llm/messages.py` | dict 消息与 LangChain 消息互转、提取文本 |
 
 ### 2.3 Agent 与能力
@@ -251,7 +252,7 @@ users、api_keys、knowledge_bases、documents、repo_connections、pending_acti
 - [x] 不支持流式输出：已支持 SSE
 - [~] 依赖版本偏旧：已做必要升级；chromadb 仍为 0.4.24（升级会影响 compose 健康检查与已有数据卷）
 - [~] 测试：已有 78 个 pytest 用例；**CI 与 lint 未配置**
-- [ ] 未处理：`small_talk` 路由到 `retrieval_agent`（保持原设计）、手写单例与未使用的 `_singleton.py`、部分未使用方法、被动恢复注释与实现不符、健康分衰减偏激进、DuckDuckGo 正则解析
+- [ ] 未处理：`small_talk` 路由到 `retrieval_agent`（保持原设计）、手写单例（共 22 处，未统一）、部分未使用方法、被动恢复注释与实现不符、健康分衰减偏激进、DuckDuckGo 正则解析
 
 ### 改造中新发现并已修复的问题
 

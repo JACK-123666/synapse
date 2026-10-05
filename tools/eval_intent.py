@@ -134,9 +134,6 @@ async def run_eval(args: argparse.Namespace) -> Dict[str, Any]:
     settings = get_settings()
     patch_inmemory_chroma()
 
-    llm = get_llm_client()
-    await llm.connect()
-
     kw = KeywordIntentRecognizer(settings)
     vec = VectorIntentRecognizer(settings)
     sem = LLMIntentRecognizer(settings)

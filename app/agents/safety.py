@@ -63,6 +63,3 @@ class FallbackAgent(BaseAgent):
 
         return AgentResponse(reply=reply, metadata=metadata)
 
-    async def health_check(self) -> bool:
-        """兜底 Agent 永远健康。"""
-        return True

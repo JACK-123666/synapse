@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, AsyncIterator, Dict, List, Sequence
+from typing import Any, AsyncIterator, Dict, List, Optional, Sequence
 
 from langchain_core.messages import BaseMessage, HumanMessage
 
@@ -81,7 +81,12 @@ class SummarizationAgent(LangChainAgent):
             metadata={"mode": "summarize", "content_length": len(content)},
         )
 
-    def build_messages(self, context: AgentContext) -> List[BaseMessage]:
+    def build_messages(
+        self,
+        context: AgentContext,
+        prepared: Optional[PreparedRun] = None,
+    ) -> List[BaseMessage]:
+        # 摘要场景的内容来自 _gather_content，不使用通用上下文块
         content_to_summarize = self._gather_content(context)
         user_prompt = f"请总结以下内容:\n\n{content_to_summarize}"
         return [HumanMessage(content=user_prompt)]

@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from contextvars import Token
@@ -27,6 +26,7 @@ from app.core.context import (
     set_request_context,
 )
 from app.core.deps import CurrentUser
+from app.core.tasks import spawn
 from app.intent.blend import get_intent_fusion
 from app.memory.archive import get_long_term_memory
 from app.memory.compress import get_memory_compressor
@@ -181,7 +181,9 @@ class ChatService:
         try:
             compressor = get_memory_compressor()
             if await compressor.should_compress(session_id):
-                asyncio.create_task(
+                # 经 spawn() 登记强引用：裸 create_task 的返回值无人引用时，
+                # 事件循环可能中途 GC 掉该任务，异常也无从取出
+                spawn(
                     compressor.compress(session_id, user_id),
                     name=f"compress-{session_id}",
                 )

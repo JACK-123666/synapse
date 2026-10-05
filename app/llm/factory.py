@@ -19,6 +19,7 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from app.core.context import get_request_context
+from app.llm.config import get_llm_config
 
 logger = logging.getLogger(__name__)
 
@@ -45,17 +46,15 @@ def resolve_model_spec(
     max_tokens: int = 2048,
 ) -> ModelSpec:
     """根据当前生效配置 + 请求级覆盖，解析出模型配置。"""
-    from app.llm.gateway import get_llm_client
-
-    client = get_llm_client()
-    cfg = client.get_config()
+    config = get_llm_config()
+    cfg = config.snapshot()
     override = model_override or get_request_context().model_override
     return ModelSpec(
         provider=cfg["provider"],
         model=override or cfg["model"],
-        api_key=client._rc("llm_api_key", "") or "",
+        api_key=config.get("llm_api_key", "") or "",
         base_url=cfg["base_url"] or "",
-        timeout=float(client._rc("llm_timeout", 60)),
+        timeout=float(config.get("llm_timeout", 60)),
         temperature=float(temperature),
         max_tokens=int(max_tokens),
     )
@@ -65,7 +64,13 @@ def resolve_model_spec(
 def _build_chat_model(spec: ModelSpec) -> BaseChatModel:
     """按配置构造 ChatModel（带缓存，相同配置复用同一个实例与连接池）。"""
     if spec.provider == "claude":
-        from langchain_anthropic import ChatAnthropic
+        try:
+            from langchain_anthropic import ChatAnthropic
+        except ImportError as exc:  # pragma: no cover - 取决于可选依赖
+            raise RuntimeError(
+                "使用 Claude 需要可选依赖 langchain-anthropic，"
+                "请执行: pip install -r requirements-extras.txt"
+            ) from exc
 
         # Anthropic SDK 会自动拼接 /v1/messages，配置里的 /v1 需要去掉
         base_url = spec.base_url.rstrip("/")
@@ -161,17 +166,15 @@ def get_embeddings() -> Embeddings:
     embedding_provider=local 时使用本地模型；否则走 OpenAI 兼容接口，
     密钥 / 地址优先用 EMBEDDING_*，留空回退 LLM_*（与原实现一致）。
     """
-    from app.llm.gateway import get_llm_client
-
-    client = get_llm_client()
-    provider = str(client._rc("embedding_provider", "openai") or "openai").lower()
+    config = get_llm_config()
+    provider = str(config.get("embedding_provider", "openai") or "openai").lower()
     if provider == "local":
         return _local_embeddings()
-    api_key = client._rc("embedding_api_key") or client._rc("llm_api_key", "") or ""
-    base_url = client._rc("embedding_base_url") or client._rc("llm_base_url", "") or ""
+    api_key = config.get("embedding_api_key") or config.get("llm_api_key", "") or ""
+    base_url = config.get("embedding_base_url") or config.get("llm_base_url", "") or ""
     return _build_openai_embeddings(
-        client._rc("embedding_model"),
+        config.get("embedding_model"),
         api_key,
         base_url,
-        float(client._rc("llm_timeout", 60)),
+        float(config.get("llm_timeout", 60)),
     )

@@ -78,8 +78,8 @@ async def startup() -> None:
         "环境变量(compose env_file 注入)" if os.environ.get("LLM_PROVIDER")
         else ".env 文件(本地开发)",
     )
-    logger.info("LLM Provider: %s, Model: %s, Backend: %s",
-                settings.llm_provider, settings.llm_model, settings.llm_backend)
+    logger.info("LLM Provider: %s, Model: %s",
+                settings.llm_provider, settings.llm_model)
     logger.info("LLM BaseURL: %s", settings.llm_base_url)
     logger.info("LLM API Key: %s", "已配置" if settings.llm_api_key else "(empty)")
     logger.info("DeepSeek URL: %s, Model: %s",
@@ -87,14 +87,9 @@ async def startup() -> None:
     logger.info("鉴权: %s", "开启" if settings.auth_enabled else "关闭（本地管理员模式）")
     logger.info("=" * 60)
 
-    # LLM 客户端
-    from app.llm.gateway import get_llm_client
-    llm = get_llm_client()
-    try:
-        await llm.connect()
-        logger.info("[OK] LLM 客户端已初始化")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("[SKIP] LLM 客户端初始化失败: %s", exc)
+    # LLM 配置（无需建连接池：ChatModel 由工厂按需创建并缓存）
+    from app.llm.config import get_llm_config
+    logger.info("[OK] LLM 配置: %s", get_llm_config().snapshot())
 
     # 预检 Redis
     try:
@@ -191,6 +186,13 @@ async def shutdown() -> None:
     """应用关闭时清理资源。"""
     logger.info("Synapse 正在关闭...")
 
+    # 先等后台任务（记忆压缩等）落盘，此时 Redis / 数据库仍然可用
+    try:
+        from app.core.tasks import drain
+        await drain()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("等待后台任务失败: %s", exc)
+
     # 关闭能力（定时任务调度器等）
     try:
         from app.capabilities.manager import get_capability_manager
@@ -212,14 +214,6 @@ async def shutdown() -> None:
         await detector.stop_recovery_loop()
     except Exception as exc:  # noqa: BLE001
         logger.warning("停止异常检测失败: %s", exc)
-
-    # 关闭 LLM 客户端
-    try:
-        from app.llm.gateway import get_llm_client
-        llm = get_llm_client()
-        await llm.close()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("关闭 LLM 客户端失败: %s", exc)
 
     # 关闭 Redis
     try:

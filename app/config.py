@@ -89,10 +89,6 @@ class Settings(BaseSettings):
         description="Embedding 专用 base_url；留空回退 llm_base_url",
     )
     llm_timeout: int = Field(default=60, description="LLM 请求超时（秒）")
-    llm_backend: str = Field(
-        default="langchain",
-        description="LLM 调用后端：langchain（LangChain ChatModel）/ httpx（原自研 HTTP 实现）",
-    )
     embedding_provider: str = Field(
         default="openai",
         description="Embedding 提供方：openai（OpenAI 兼容接口）/ local（ChromaDB 内置本地模型，无需 API Key）",
@@ -178,6 +174,17 @@ class Settings(BaseSettings):
     intent_llm_weight: float = Field(default=0.5, description="LLM 语义理解权重")
     intent_vector_weight: float = Field(default=0.3, description="向量相似度权重")
     intent_keyword_weight: float = Field(default=0.2, description="关键词投票权重")
+    intent_llm_timeout: float = Field(
+        default=5.0,
+        description="意图识别 LLM 路的独立超时（秒）；超时视为该路失败，权重自动转给其余两路",
+    )
+    intent_short_circuit: bool = Field(
+        default=True,
+        description="关键词与向量两路结论一致且高置信时跳过 LLM 路，省掉一次 LLM 往返",
+    )
+    intent_short_circuit_min_score: float = Field(
+        default=0.8, description="短路所需的单路最低归一化分数"
+    )
 
     # 记忆管理
     short_term_max_rounds: int = Field(

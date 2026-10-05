@@ -141,6 +141,7 @@ def auth_enabled(monkeypatch):
 @pytest.fixture(autouse=True)
 def _isolate_registries(monkeypatch):
     """每个测试使用全新的工具注册表 / 意图目录 / Agent 注册表 / 能力管理器。"""
+    from app.agents import langchain_agent
     from app.capabilities import manager as cap_manager
     from app.capabilities.knowledge import service as kb_service
     from app.capabilities.repo import service as repo_service
@@ -163,4 +164,8 @@ def _isolate_registries(monkeypatch):
     monkeypatch.setattr(route, "_instance", None)
     monkeypatch.setattr(blend, "_instance", None)
     monkeypatch.setattr(cap_manager, "_manager", None)
+
+    # Agent 图缓存按 (模型配置, 工具集, system_prompt) 复用，跨测试必须清空，
+    # 否则后续用例会拿到前面用例注入的假模型编译出来的图
+    langchain_agent.clear_agent_cache()
     yield

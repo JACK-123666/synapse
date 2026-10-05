@@ -1,0 +1,23 @@
+# ============================================================
+# Synapse 可选能力依赖
+#
+# 核心功能不依赖这些包；缺失时对应能力会给出明确的安装提示：
+#   pip install -r requirements-extras.txt
+#
+# Docker 构建默认会装；要构建更精简的镜像：
+#   docker build --build-arg INSTALL_EXTRAS=0 .
+# ============================================================
+
+# ---------- Claude（LLM_PROVIDER=claude）----------
+langchain-anthropic>=1.7,<2
+
+# ---------- MCP 服务接入（MCP_ENABLED=true）----------
+langchain-mcp-adapters>=0.3,<0.4
+mcp>=1.24,<2
+
+# ---------- PostgreSQL（DATABASE_URL=postgresql+asyncpg://...）----------
+asyncpg>=0.29
+
+# ---------- PDF / DOCX 文档解析 ----------
+pypdf>=4.2
+python-docx>=1.1

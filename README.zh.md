@@ -142,11 +142,12 @@ app/
 ├── config.py               所有可配参数
 ├── store.py                Redis / ChromaDB 连接单例
 ├── api/                    chat（含 /chat/stream）、system、auth、knowledge、memory、repos、schedules、plugins
-├── core/                   请求上下文、数据库、安全（JWT / API Key / 加密）、鉴权依赖
+├── core/                   请求上下文、数据库、安全（JWT / API Key / 加密）、鉴权依赖、后台任务托管
 ├── models/                 ORM：用户、知识库、仓库连接、定时任务、插件状态……
 ├── services/               对话编排、用户、工具白名单
 ├── llm/
-│   ├── gateway.py          LLM 统一客户端（运行时切换，保留 httpx 备用实现）
+│   ├── config.py           LLM 运行时配置（运行时覆盖 > .env）
+│   ├── gateway.py          LLM 统一入口（chat / embed，单一 LangChain 后端）
 │   └── factory.py          LangChain ChatModel / Embeddings 工厂
 ├── intent/                 三路融合 + 动态意图目录（catalog.py）
 ├── router/                 Agent 注册表、分发与降级（含流式）
@@ -189,7 +190,7 @@ class OrderPlugin(Capability):
 
 ```bash
 python -m venv .venv && .venv/Scripts/activate     # Python 3.10 / 3.11（chromadb 0.4.24 需要 numpy<2）
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # 核心 + 测试依赖（只跑应用用 requirements.txt）
 pytest                                              # Redis / Chroma / LLM 全部使用本地替身
 python tools/eval_intent.py --no-llm                # 意图识别评测
 python tools/eval_memory.py                         # 记忆 Token 评测

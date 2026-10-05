@@ -1,6 +1,6 @@
-"""Agent 工具注册表与执行器 —— Function Calling 的 tool 定义。
+"""Agent 工具注册表与执行器。
 
-- web_search_schema / call_tool：原有的 OpenAI 风格 schema 与执行器（保留兼容）
+- call_tool：工具执行入口（保留兼容；web 能力的 web_search 工具复用它）
 - ToolRegistry：LangChain 工具注册表，记录每个工具的来源（内置 / 插件 / MCP）、
   标签、是否写操作、允许的角色，并按角色白名单过滤给 Agent 使用
 """
@@ -17,36 +17,6 @@ from langchain_core.tools import BaseTool
 from app.tools.search import web_search
 
 logger = logging.getLogger(__name__)
-
-
-def web_search_schema() -> Dict[str, Any]:
-    """返回 OpenAI 风格的 function 工具 schema（可传给 LLM 的 tools 参数）。"""
-    return {
-        "type": "function",
-        "function": {
-            "name": "web_search",
-            "description": (
-                "联网搜索互联网获取最新/实时信息。当本地知识库没有答案、"
-                "或用户需要最新资料时调用。返回标题、摘要与链接。"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "要搜索的关键词或完整问题",
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "返回结果条数，默认 5（1~10）",
-                        "minimum": 1,
-                        "maximum": 10,
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-    }
 
 
 async def call_tool(
@@ -260,7 +230,6 @@ def get_tool_registry() -> ToolRegistry:
 
 
 __all__ = [
-    "web_search_schema",
     "call_tool",
     "ToolEntry",
     "ToolRegistry",

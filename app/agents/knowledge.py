@@ -38,20 +38,36 @@ class RetrievalAgent(LangChainAgent):
     temperature = 0.5
     max_tokens = 2048
 
+    #: 三种意图各自的静态系统提示词；动态内容（检索结果 / 记忆 / 画像）走 context_blocks
+    _RETRIEVAL_PROMPT = (
+        "你是一个知识渊博的 AI 助手，用检索到的参考资料回答问题。\n"
+        "请基于提供的上下文给出准确、有用的回答，如果上下文不足则诚实说明。\n"
+        "引用【本地知识库检索结果】或联网结果时请注明来源。\n"
+        "本地资料不足或需要最新信息时，可调用联网搜索 / 网页抓取工具。\n"
+        "回答简洁清晰，必要时分点说明；涉及技术细节请确保准确。"
+    )
+    _CHAT_PROMPT = (
+        "你是一个友好、善解人意的 AI 聊天助手，用自然口语化的方式与用户交流。\n"
+        "保持对话轻松愉快，适当使用语气词让回复更亲切。\n"
+        "如果用户问具体问题，认真回答；如果是打招呼或闲聊，就轻松回应。"
+    )
+    _SUMMARIZE_PROMPT = (
+        "你是一个专业的摘要与总结助手。请对用户提供的内容进行结构化总结。\n"
+        "包含：核心要点、关键结论、需要跟进的事项。"
+    )
+
     async def prepare(self, context: AgentContext) -> PreparedRun:
         """执行知识检索 / 闲聊回复前的准备。
 
         small_talk：直接以自然友好的方式聊天，不走知识检索。
-        knowledge_retrieval：从知识库检索 + long‑term 召回，LLM 综合回答。
-        summarize：委托上下文中的记忆做摘要（实际由 SummarizationAgent 处理，
+        knowledge_retrieval：从知识库检索，结果作为上下文块注入消息序列。
+        summarize：委托上下文中的记忆做摘要（正常由 SummarizationAgent 处理，
         此处兜底处理未路由到 summarize 的情况）。
         """
         intent = context.intent
         long_term = get_long_term_memory()
-        web_text: str = ""
 
         # ---- knowledge_retrieval / summarize：检索知识 ----
-        knowledge_text: str = ""
         knowledge_results: List[Dict[str, Any]] = []
         if intent in ("knowledge_retrieval", "summarize"):
             try:
@@ -73,35 +89,25 @@ class RetrievalAgent(LangChainAgent):
             except Exception as exc:  # noqa: BLE001
                 logger.warning("检索 Agent: RAG 知识库检索异常: %s", exc)
 
-            if knowledge_results:
-                knowledge_results.sort(key=lambda r: r.get("score", 0), reverse=True)
-                snippets = [self._format_snippet(r) for r in knowledge_results if r.get("text")]
-                knowledge_text = "\n---\n".join(snippets)
+        # 检索结果按分数排序，打包成上下文块交给 build_context_block
+        context_blocks: List[str] = []
+        if knowledge_results:
+            knowledge_results.sort(key=lambda r: r.get("score", 0), reverse=True)
+            snippets = [self._format_snippet(r) for r in knowledge_results if r.get("text")]
+            if snippets:
+                context_blocks.append(
+                    "【本地知识库检索结果】\n" + "\n---\n".join(snippets)
+                )
                 logger.info(
                     "检索 Agent: session=%s 检索到 %d 条知识",
                     context.session_id, len(knowledge_results),
                 )
 
-        # ---- 按意图选择 system prompt ----
-        if intent == "small_talk":
-            system_prompt = self._build_chat_prompt(
-                recall_text=self._format_recall(context.long_term_recall),
-                user_profile_text=context.user_profile_context,
-            )
-        elif intent == "summarize":
-            system_prompt = self._build_summarize_prompt(
-                knowledge_text=knowledge_text,
-                recall_text=self._format_recall(context.long_term_recall),
-                user_profile_text=context.user_profile_context,
-            )
-        else:
-            # knowledge_retrieval 及其他意图走知识检索 prompt
-            system_prompt = self._build_retrieval_prompt(
-                knowledge_text=knowledge_text,
-                web_text=web_text,
-                recall_text=self._format_recall(context.long_term_recall),
-                user_profile_text=context.user_profile_context,
-            )
+        # 系统提示词只按意图选择静态文案，逐字节稳定 → Agent 图可缓存、prefix cache 可命中
+        system_prompt = {
+            "small_talk": self._CHAT_PROMPT,
+            "summarize": self._SUMMARIZE_PROMPT,
+        }.get(intent, self._RETRIEVAL_PROMPT)
 
         # 联网搜索：knowledge_retrieval 且允许联网时，交由模型通过 Function Calling 决定是否调用
         tools = []
@@ -120,7 +126,12 @@ class RetrievalAgent(LangChainAgent):
             ],
             "recall_count": len(context.long_term_recall),
         }
-        return PreparedRun(system_prompt=system_prompt, tools=tools, metadata=metadata)
+        return PreparedRun(
+            system_prompt=system_prompt,
+            tools=tools,
+            metadata=metadata,
+            context_blocks=context_blocks,
+        )
 
     def build_metadata(
         self,
@@ -145,108 +156,3 @@ class RetrievalAgent(LangChainAgent):
             str(result[k]) for k in ("kb", "filename") if result.get(k)
         )
         return f"[来源: {source}]\n{text}" if source else text
-
-    def _build_retrieval_prompt(
-        self,
-        knowledge_text: str,
-        web_text: str,
-        recall_text: str,
-        user_profile_text: str,
-    ) -> str:
-        """知识检索 system prompt。"""
-        parts: List[str] = [
-            "你是一个知识渊博的 AI 助手，用检索到的参考资料回答问题。",
-            "请基于提供的上下文给出准确、有用的回答，如果上下文不足则诚实说明。",
-        ]
-
-        if knowledge_text:
-            parts.append(f"\n【本地知识库】\n{knowledge_text}")
-            parts.append("（引用本地知识库内容时请注明来源）")
-
-        if web_text:
-            parts.append(f"\n【联网搜索结果】\n{web_text}")
-            parts.append("（以上为实时联网搜索结果，请引用时注明来源链接）")
-
-        if recall_text:
-            parts.append(f"\n【历史相关摘要】\n{recall_text}")
-
-        if user_profile_text:
-            parts.append(f"\n【用户画像】\n{user_profile_text}")
-
-        parts.append(
-            "\n【要求】回答简洁清晰，必要时分点说明。若涉及技术细节请确保准确。"
-            "本地资料不足或需要最新信息时，可调用联网搜索 / 网页抓取工具，并注明来源链接。"
-        )
-        return "\n".join(parts)
-
-    def _build_chat_prompt(
-        self,
-        recall_text: str,
-        user_profile_text: str,
-    ) -> str:
-        """闲聊 system prompt：自然友好，不强制检索。"""
-        parts: List[str] = [
-            "你是一个友好、善解人意的 AI 聊天助手，用自然口语化的方式与用户交流。",
-            "保持对话轻松愉快，适当使用语气词让回复更亲切。",
-            "如果用户问具体问题，认真回答；如果是打招呼或闲聊，就轻松回应。",
-        ]
-
-        if recall_text:
-            parts.append(f"\n【你可能记得的历史对话】\n{recall_text}")
-
-        if user_profile_text:
-            parts.append(f"\n【关于这位用户】\n{user_profile_text}")
-
-        return "\n".join(parts)
-
-    def _build_summarize_prompt(
-        self,
-        knowledge_text: str,
-        recall_text: str,
-        user_profile_text: str,
-    ) -> str:
-        """摘要 system prompt（兜底，正常由 SummarizationAgent 处理）。"""
-        parts: List[str] = [
-            "你是一个专业的摘要与总结助手。请对用户提供的内容进行结构化总结。",
-            "包含：核心要点、关键结论、需要跟进的事项。",
-        ]
-
-        if knowledge_text:
-            parts.append(f"\n【参考资料】\n{knowledge_text}")
-
-        if recall_text:
-            parts.append(f"\n【历史上下文】\n{recall_text}")
-
-        if user_profile_text:
-            parts.append(f"\n【用户信息】\n{user_profile_text}")
-
-        return "\n".join(parts)
-
-    def _build_messages(
-        self,
-        short_term: List[Dict[str, Any]],
-        current_message: str,
-    ) -> List[Dict[str, str]]:
-        """构建 LLM 消息列表：短期记忆 + 当前消息。"""
-        messages: List[Dict[str, str]] = []
-        # 包含最近的对话历史
-        for msg in short_term:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            messages.append({"role": role, "content": content})
-        # 当前消息
-        messages.append({"role": "user", "content": current_message})
-        return messages
-
-    @staticmethod
-    def _format_recall(recall: List[Dict[str, Any]]) -> str:
-        """格式化长期记忆召回摘要。"""
-        if not recall:
-            return ""
-        parts = []
-        for i, item in enumerate(recall, 1):
-            text = item.get("text", "")
-            score = item.get("score", 0)
-            if text:
-                parts.append(f"[{i}] (相似度: {score:.2f}) {text}")
-        return "\n".join(parts)

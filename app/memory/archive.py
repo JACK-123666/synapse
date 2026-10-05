@@ -38,6 +38,8 @@ class LongTermMemory:
     def __init__(self, settings: Optional[Settings] = None) -> None:
         self._settings: Settings = settings or get_settings()
         self._collection = None
+        #: 全局知识集合句柄（懒加载 + 缓存）
+        self._knowledge_collection = None
 
     def _get_collection(self):
         """获取或创建 ChromaDB 集合（懒加载）。"""
@@ -53,6 +55,15 @@ class LongTermMemory:
                 self._settings.chroma_collection_summary,
             )
         return self._collection
+
+    def _get_knowledge_collection(self):
+        """获取全局知识集合（懒加载 + 缓存；同步，须在 to_thread 中调用）。"""
+        if self._knowledge_collection is None:
+            self._knowledge_collection = get_chroma().get_or_create_collection(
+                name=self._settings.chroma_collection_knowledge,
+                metadata={"hnsw:space": "cosine"},
+            )
+        return self._knowledge_collection
 
     async def store_summary(
         self,
@@ -243,11 +254,7 @@ class LongTermMemory:
             logger.error("长期记忆: 知识 embedding 失败: %s", exc)
             raise
 
-        client = get_chroma()
-        collection = client.get_or_create_collection(
-            name=self._settings.chroma_collection_knowledge,
-            metadata={"hnsw:space": "cosine"},
-        )
+        collection = await asyncio.to_thread(self._get_knowledge_collection)
         await asyncio.to_thread(
             collection.add,
             ids=[knowledge_id],
@@ -278,12 +285,8 @@ class LongTermMemory:
             logger.error("长期记忆: 知识检索 embedding 失败: %s", exc)
             return []
 
-        client = get_chroma()
         try:
-            collection = client.get_or_create_collection(
-                name=self._settings.chroma_collection_knowledge,
-                metadata={"hnsw:space": "cosine"},
-            )
+            collection = await asyncio.to_thread(self._get_knowledge_collection)
         except Exception as exc:  # noqa: BLE001
             logger.error("长期记忆: 获取知识库集合失败: %s", exc)
             return []

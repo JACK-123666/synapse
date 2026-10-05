@@ -124,20 +124,6 @@ class MemoryCompressor:
         )
         return summary
 
-    async def compress_if_needed(
-        self,
-        session_id: str,
-        user_id: Optional[str] = None,
-    ) -> Optional[str]:
-        """检查并按需执行压缩（便捷方法）。
-
-        Returns:
-            压缩后的摘要文本（如果触发了压缩），否则 None
-        """
-        if await self.should_compress(session_id):
-            return await self.compress(session_id, user_id)
-        return None
-
     def _format_dialogue(self, messages: List[Dict[str, Any]]) -> str:
         """将短期记忆消息列表格式化为对话文本。
 

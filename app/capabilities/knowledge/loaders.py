@@ -31,7 +31,12 @@ def decode_text(data: bytes) -> str:
 
 
 def _pdf_text(data: bytes) -> str:
-    from pypdf import PdfReader
+    try:
+        from pypdf import PdfReader
+    except ImportError as exc:  # pragma: no cover - 取决于可选依赖
+        raise UnsupportedFileType(
+            "解析 PDF 需要可选依赖 pypdf，请执行: pip install -r requirements-extras.txt"
+        ) from exc
 
     reader = PdfReader(io.BytesIO(data))
     pages = []
@@ -43,7 +48,12 @@ def _pdf_text(data: bytes) -> str:
 
 
 def _docx_text(data: bytes) -> str:
-    import docx
+    try:
+        import docx
+    except ImportError as exc:  # pragma: no cover - 取决于可选依赖
+        raise UnsupportedFileType(
+            "解析 DOCX 需要可选依赖 python-docx，请执行: pip install -r requirements-extras.txt"
+        ) from exc
 
     document = docx.Document(io.BytesIO(data))
     parts = [p.text for p in document.paragraphs if p.text.strip()]

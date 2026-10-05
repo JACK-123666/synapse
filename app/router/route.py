@@ -50,32 +50,11 @@ class TaskDispatcher:
             Agent 执行响应（保证非空）
         """
         intent = context.intent
-
-        # 获取候选 Agent ID 列表（只含健康的）
-        candidates = self._registry.get_healthy_agents_for_intent(intent)
-
-        # 如果该意图无可用 Agent，尝试使用 small_talk 路由
-        if not candidates and intent != "small_talk":
-            logger.warning(
-                "分发: 意图 '%s' 无可用 Agent，回退到 small_talk", intent
-            )
-            candidates = self._registry.get_healthy_agents_for_intent("small_talk")
-
-        # 确保兜底 Agent 在最后
-        if not candidates:
-            candidates = ["fallback_agent"]
-
-        # 确保 fallback_agent 在候选列表末尾（如果不在的话）
-        fallback_id = "fallback_agent"
-        candidates = [c for c in candidates if c != fallback_id]
-        candidates.append(fallback_id)
-
-        logger.info(
-            "分发: session=%s 意图=%s 候选=%s",
-            context.session_id, intent, candidates,
+        # 候选列表由 _candidates_for 统一计算（健康过滤 + small_talk 回退 + 兜底置尾），
+        # 原先此处有一份等价的内联副本，已合并
+        sorted_candidates = self._ordered_candidates(
+            self._candidates_for(intent, context.session_id)
         )
-
-        sorted_candidates = self._ordered_candidates(candidates)
 
         last_error: Optional[Exception] = None
         used_agent_id: Optional[str] = None
@@ -263,10 +242,6 @@ class TaskDispatcher:
         # 降序排列（权重高的在前）
         weighted.sort(key=lambda x: x[0], reverse=True)
         return [aid for _, aid in weighted]
-
-    def record_fallback(self, agent_id: str) -> None:
-        """记录一次降级兜底事件。"""
-        metrics.record_request(agent_id, "fallback", 0.0)
 
 
 # 全局单例

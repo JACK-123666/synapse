@@ -83,6 +83,8 @@ class KnowledgeService:
 
     def __init__(self) -> None:
         self._settings = get_settings()
+        #: 集合名 -> Chroma 集合句柄（缓存，避免重复发起 HTTP 往返）
+        self._collections: Dict[str, Any] = {}
 
     # ---- 权限 ----
 
@@ -105,9 +107,14 @@ class KnowledgeService:
     # ---- Chroma ----
 
     def _collection(self, collection_name: str):
-        return get_chroma().get_or_create_collection(
-            name=collection_name, metadata={"hnsw:space": "cosine"}
-        )
+        """获取集合句柄（按名字缓存；同步，须在 to_thread 中调用）。"""
+        cached = self._collections.get(collection_name)
+        if cached is None:
+            cached = get_chroma().get_or_create_collection(
+                name=collection_name, metadata={"hnsw:space": "cosine"}
+            )
+            self._collections[collection_name] = cached
+        return cached
 
     def _splitter(self) -> RecursiveCharacterTextSplitter:
         return RecursiveCharacterTextSplitter(
@@ -230,6 +237,8 @@ class KnowledgeService:
             await asyncio.to_thread(get_chroma().delete_collection, collection_name)
         except Exception as exc:  # noqa: BLE001
             logger.warning("删除知识库向量集合失败（可忽略）: %s", exc)
+        # 集合已删除，必须丢弃缓存的句柄，否则后续拿到的会是悬空引用
+        self._collections.pop(collection_name, None)
         for doc_id in doc_ids:
             self._text_path(doc_id).unlink(missing_ok=True)
 
@@ -387,6 +396,8 @@ class KnowledgeService:
             await asyncio.to_thread(get_chroma().delete_collection, collection_name)
         except Exception:  # noqa: BLE001
             pass
+        # 集合已删除，必须丢弃缓存的句柄，重建索引时才能拿到新集合
+        self._collections.pop(collection_name, None)
         done, failed = 0, 0
         for doc_id, filename in doc_infos:
             path = self._text_path(doc_id)

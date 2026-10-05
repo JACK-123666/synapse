@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Tuple
 
 from langchain.agents import create_agent
@@ -27,7 +28,7 @@ from langchain_core.messages import (
 from langchain_core.tools import BaseTool
 
 from app.agents.base import AgentContext, AgentResponse, BaseAgent
-from app.llm.factory import get_chat_model
+from app.llm.factory import ModelSpec, get_chat_model, resolve_model_spec
 from app.llm.gateway import LLMError
 from app.llm.messages import message_text
 from app.tools.registry import get_tool_registry
@@ -42,6 +43,9 @@ class PreparedRun:
     system_prompt: str
     tools: List[BaseTool]
     metadata: Dict[str, Any] = field(default_factory=dict)
+    #: 每请求变化的上下文（检索到的知识等）。刻意不放进 system_prompt，
+    #: 而是拼到消息末尾，见 build_context_block 的说明。
+    context_blocks: List[str] = field(default_factory=list)
 
 
 def format_recall(recall: List[Dict[str, Any]]) -> str:
@@ -55,6 +59,50 @@ def format_recall(recall: List[Dict[str, Any]]) -> str:
         if text:
             parts.append(f"[{i}] (相似度: {score:.2f}) {text}")
     return "\n".join(parts)
+
+
+def build_context_block(
+    context: AgentContext,
+    extra_blocks: Optional[Sequence[str]] = None,
+) -> str:
+    """拼装每请求变化的上下文块：检索到的知识 + 长期记忆召回 + 用户画像。
+
+    这些内容刻意不写进 system_prompt，因为 system_prompt 一旦逐字节稳定：
+    - 编译后的 Agent 图才能按 (模型配置, 工具集, system_prompt) 缓存复用；
+    - 上游 LLM 的 prefix cache 才能命中，省掉每轮重新 prefill 的开销。
+    动态内容统一落在消息序列末尾，稳定前缀不被破坏。
+    """
+    blocks: List[str] = [b for b in (extra_blocks or []) if b]
+    recall_text = format_recall(context.long_term_recall)
+    if recall_text:
+        blocks.append(f"【历史相关摘要】\n{recall_text}")
+    if context.user_profile_context:
+        blocks.append(f"【用户画像】\n{context.user_profile_context}")
+    return "\n\n".join(blocks)
+
+
+#: 编译后的 Agent 图缓存，key = (模型配置, 工具名集合, system_prompt)。
+#: create_agent 会编译一张 LangGraph 状态图，每请求重建纯属浪费；
+#: 编译产物本身无状态，可以安全地跨请求、跨并发复用。
+@lru_cache(maxsize=128)
+def _compiled_agent(spec: ModelSpec, tool_names: Tuple[str, ...], system_prompt: str):
+    model = get_chat_model(
+        temperature=spec.temperature,
+        max_tokens=spec.max_tokens,
+        model_override=spec.model,
+    )
+    registry = get_tool_registry()
+    tools = [t for t in (registry.get(n) for n in tool_names) if t is not None]
+    return create_agent(model, tools=tools, system_prompt=system_prompt)
+
+
+def clear_agent_cache() -> None:
+    """清空 Agent 图缓存。
+
+    能力 / 插件注册或注销后必须调用：缓存里的图持有的是当时的工具对象，
+    热重载若只换了实现而工具名不变，不清缓存就会继续用旧的。
+    """
+    _compiled_agent.cache_clear()
 
 
 def collect_tool_info(messages: Sequence[BaseMessage]) -> Dict[str, Any]:
@@ -100,13 +148,14 @@ class LangChainAgent(BaseAgent):
     # ---- 可覆写的钩子 ----
 
     def build_system_prompt(self, context: AgentContext) -> str:
-        parts: List[str] = [f"你是 Synapse 智能助手中的「{self.description}」。"]
-        recall_text = format_recall(context.long_term_recall)
-        if recall_text:
-            parts.append(f"\n【历史相关摘要】\n{recall_text}")
-        if context.user_profile_context:
-            parts.append(f"\n【用户画像】\n{context.user_profile_context}")
-        return "\n".join(parts)
+        """系统提示词。
+
+        必须只依赖 Agent 自身的静态信息。动态内容（记忆召回、用户画像、
+        检索结果）一律交给 build_context_block 拼进消息序列，这样
+        system_prompt 逐字节稳定，Agent 图缓存与上游 prefix cache 才能命中。
+        context 参数保留是为了子类签名兼容。
+        """
+        return f"你是 Synapse 智能助手中的「{self.description}」。"
 
     def select_tools(self, context: AgentContext) -> List[BaseTool]:
         if self.tool_tags is not None and len(self.tool_tags) == 0:
@@ -118,8 +167,17 @@ class LangChainAgent(BaseAgent):
             include_write=self.include_write_tools,
         )
 
-    def build_messages(self, context: AgentContext) -> List[BaseMessage]:
-        """短期记忆 + 当前消息。"""
+    def build_messages(
+        self,
+        context: AgentContext,
+        prepared: Optional[PreparedRun] = None,
+    ) -> List[BaseMessage]:
+        """短期记忆 + 上下文块 + 当前消息。
+
+        上下文块（检索知识 / 长期记忆 / 用户画像）刻意放在历史之后、当前消息之前：
+        system_prompt 与历史构成稳定前缀，动态内容只落在末尾，每轮仅末段变化，
+        Agent 图缓存与上游 prefix cache 都不受影响。
+        """
         messages: List[BaseMessage] = []
         for msg in context.short_term_memory:
             role = msg.get("role", "user")
@@ -128,6 +186,15 @@ class LangChainAgent(BaseAgent):
                 messages.append(AIMessage(content=content))
             else:
                 messages.append(HumanMessage(content=content))
+
+        ctx_block = build_context_block(
+            context, prepared.context_blocks if prepared else None
+        )
+        if ctx_block:
+            messages.append(HumanMessage(content=ctx_block))
+            # 给上下文一个明确的回合边界，避免模型把资料当成用户指令
+            messages.append(AIMessage(content="好的，我已了解这些背景资料。"))
+
         messages.append(HumanMessage(content=context.message))
         return messages
 
@@ -159,15 +226,23 @@ class LangChainAgent(BaseAgent):
             model_override=context.model_override,
         )
 
+    def _agent_for(self, context: AgentContext, prepared: PreparedRun):
+        """取（必要时编译并缓存）本请求对应的 Agent 图。"""
+        spec = resolve_model_spec(
+            model_override=context.model_override,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )
+        tool_names = tuple(sorted(t.name for t in prepared.tools))
+        return _compiled_agent(spec, tool_names, prepared.system_prompt)
+
     async def execute(self, context: AgentContext) -> AgentResponse:
         prepared = await self.prepare(context)
-        inputs = self.build_messages(context)
-        model = self._model(context)
+        inputs = self.build_messages(context, prepared)
         try:
             if prepared.tools:
-                agent = create_agent(
-                    model, tools=prepared.tools, system_prompt=prepared.system_prompt
-                )
+                # 复用缓存的 Agent 图，不再每请求重新编译 LangGraph
+                agent = self._agent_for(context, prepared)
                 result = await agent.ainvoke(
                     {"messages": inputs},
                     config={"recursion_limit": self.recursion_limit},
@@ -176,7 +251,7 @@ class LangChainAgent(BaseAgent):
                 new_messages = all_messages[len(inputs):]
                 reply = _final_reply(new_messages)
             else:
-                ai = await model.ainvoke(
+                ai = await self._model(context).ainvoke(
                     [SystemMessage(content=prepared.system_prompt), *inputs]
                 )
                 new_messages = [ai]
@@ -192,8 +267,7 @@ class LangChainAgent(BaseAgent):
 
     async def stream(self, context: AgentContext) -> AsyncIterator[Dict[str, Any]]:
         prepared = await self.prepare(context)
-        inputs = self.build_messages(context)
-        model = self._model(context)
+        inputs = self.build_messages(context, prepared)
         new_messages: List[BaseMessage] = []
         streamed: List[str] = []
         # 已输出过文本的消息 ID：模型不支持增量输出时，messages 模式会推送完整 AIMessage
@@ -201,9 +275,8 @@ class LangChainAgent(BaseAgent):
 
         try:
             if prepared.tools:
-                agent = create_agent(
-                    model, tools=prepared.tools, system_prompt=prepared.system_prompt
-                )
+                # 复用缓存的 Agent 图，不再每请求重新编译 LangGraph
+                agent = self._agent_for(context, prepared)
                 async for mode, data in agent.astream(
                     {"messages": inputs},
                     config={"recursion_limit": self.recursion_limit},
@@ -244,7 +317,7 @@ class LangChainAgent(BaseAgent):
                                     }
                 reply = _final_reply(new_messages) or "".join(streamed)
             else:
-                async for chunk in model.astream(
+                async for chunk in self._model(context).astream(
                     [SystemMessage(content=prepared.system_prompt), *inputs]
                 ):
                     text = message_text(chunk)
@@ -276,16 +349,12 @@ class GeneralAgent(LangChainAgent):
     description: str = "通用全能助手"
     tool_tags = None
 
+    _SYSTEM_PROMPT = (
+        "你是 Synapse 全能智能助手，可以调用各种工具完成任务：知识库问答、"
+        "记忆检索、网页抓取与搜索、代码仓库查询、定时任务管理以及插件提供的扩展能力。\n"
+        "需要实时信息或具体数据时优先调用工具，不要编造；工具返回错误时如实告知用户。\n"
+        "回答简洁清晰，必要时分点说明。"
+    )
+
     def build_system_prompt(self, context: AgentContext) -> str:
-        parts: List[str] = [
-            "你是 Synapse 全能智能助手，可以调用各种工具完成任务：知识库问答、"
-            "记忆检索、网页抓取与搜索、代码仓库查询、定时任务管理以及插件提供的扩展能力。",
-            "需要实时信息或具体数据时优先调用工具，不要编造；工具返回错误时如实告知用户。",
-            "回答简洁清晰，必要时分点说明。",
-        ]
-        recall_text = format_recall(context.long_term_recall)
-        if recall_text:
-            parts.append(f"\n【历史相关摘要】\n{recall_text}")
-        if context.user_profile_context:
-            parts.append(f"\n【用户画像】\n{context.user_profile_context}")
-        return "\n".join(parts)
+        return self._SYSTEM_PROMPT

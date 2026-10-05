@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from app.config import Settings, get_settings
 from app.intent.keyword import KeywordIntentRecognizer
@@ -55,32 +55,36 @@ class IntentFusion:
         Returns:
             (意图标签, 融合置信度) 元组
             - 若所有路均失败，返回 ("small_talk", 1.0) 作为默认兜底
+
+        执行顺序按成本从低到高：
+        1. 关键词 + 向量两路（本地、便宜）并行执行；
+        2. 两路结论一致且都高置信时直接短路，省掉一次 LLM 往返；
+        3. 否则再跑 LLM 路，带独立超时（超时视为该路失败，权重转给前两路）；
+        4. 三路加权融合取最高分。
         """
-        # 三路并行执行，通过 asyncio.gather 并发跑
-        llm_task = self._llm.recognize(message)
-        vec_task = self._vector.recognize(message)
-        kw_task = self._keyword.recognize(message)
-
-        results = await asyncio.gather(
-            llm_task, vec_task, kw_task, return_exceptions=True
+        # ---- 第一级：关键词 + 向量（本地，无 LLM 成本）----
+        vec_raw, kw_raw = await asyncio.gather(
+            self._vector.recognize(message),
+            self._keyword.recognize(message),
+            return_exceptions=True,
         )
+        vector_result = self._unwrap(vec_raw, "向量")
+        keyword_result = self._unwrap(kw_raw, "关键词")
 
-        llm_result: Optional[Dict[str, float]] = None
-        vector_result: Optional[Dict[str, float]] = None
-        keyword_result: Optional[Dict[str, float]] = None
+        # ---- 短路：两路一致且高置信，跳过 LLM ----
+        if self._settings.intent_short_circuit:
+            short = self._try_short_circuit(keyword_result, vector_result)
+            if short is not None:
+                intent, confidence = short
+                metrics.record_intent_confidence(intent, confidence)
+                logger.info(
+                    "融合意图识别(短路): '%s' -> %s (置信度=%.2f, 关键词+向量一致，跳过 LLM)",
+                    message[:50], intent, confidence,
+                )
+                return (intent, confidence)
 
-        for i, (result, name) in enumerate(zip(
-            results, ["LLM", "向量", "关键词"]
-        )):
-            if isinstance(result, Exception):
-                logger.warning("融合器: %s 意图识别异常: %s", name, result)
-            else:
-                if i == 0:
-                    llm_result = result
-                elif i == 1:
-                    vector_result = result
-                else:
-                    keyword_result = result
+        # ---- 第二级：LLM 语义路（带独立超时）----
+        llm_result = await self._recognize_llm(message)
 
         # 动态权重分配：失败的路将其权重重新分配给健康路
         weights = self._compute_weights(
@@ -109,6 +113,67 @@ class IntentFusion:
             weights.get("llm", 0), weights.get("vector", 0), weights.get("keyword", 0),
         )
         return (best_intent, confidence)
+
+    @staticmethod
+    def _unwrap(result: Any, name: str) -> Optional[Dict[str, float]]:
+        """把 gather 的结果规整为分数字典或 None（异常一律记为该路失败）。"""
+        if isinstance(result, BaseException):
+            logger.warning("融合器: %s 意图识别异常: %s", name, result)
+            return None
+        return result
+
+    async def _recognize_llm(self, message: str) -> Optional[Dict[str, float]]:
+        """执行 LLM 语义路；超时或异常一律视为该路失败。
+
+        这个超时是必需的：LLM 路权重最高（默认 0.5）且位于请求关键路径上，
+        一旦挂起，整个请求会一直等到 llm_timeout（默认 60s），
+        远超 agent_timeout（默认 30s），降级机制根本来不及介入。
+        """
+        timeout = self._settings.intent_llm_timeout
+        try:
+            return await asyncio.wait_for(
+                self._llm.recognize(message), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "融合器: LLM 意图识别超时 (%.1fs)，该路权重转给向量/关键词", timeout
+            )
+            return None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("融合器: LLM 意图识别异常: %s", exc)
+            return None
+
+    def _try_short_circuit(
+        self,
+        keyword_result: Optional[Dict[str, float]],
+        vector_result: Optional[Dict[str, float]],
+    ) -> Optional[Tuple[str, float]]:
+        """关键词与向量两路结论一致且都高置信时，直接判定，跳过 LLM 路。
+
+        只有两路完全同意同一个意图、且各自分数都达到阈值才短路。
+        一旦消息存在歧义（例如同时出现「总结」和「文档」），
+        关键词命中数被摊薄到多个意图上，分数自然落到阈值以下，仍走完整三路融合。
+        """
+        if not keyword_result or not vector_result:
+            return None
+
+        kw_top = max(keyword_result, key=keyword_result.get)
+        vec_top = max(vector_result, key=vector_result.get)
+        if kw_top != vec_top:
+            return None
+
+        min_score = self._settings.intent_short_circuit_min_score
+        confidence = min(keyword_result[kw_top], vector_result[vec_top])
+        if confidence < min_score:
+            return None
+
+        # 用「LLM 路缺席」的权重重分配结果折算，口径与完整路径一致
+        weights = self._compute_weights(False, True, True)
+        fused = (
+            keyword_result[kw_top] * weights["keyword"]
+            + vector_result[vec_top] * weights["vector"]
+        )
+        return kw_top, fused
 
     def _compute_weights(
         self,

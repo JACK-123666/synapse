@@ -1,31 +1,25 @@
 """统一 LLM 客户端封装。
 
-支持两种后端：
-- OpenAI（兼容 OpenAI 协议的自建服务 / 代理）
-- Claude（Anthropic 官方 API）
+对外只提供三类能力：
+- chat(messages, **kwargs) -> str   对话补全
+- embed(text) -> list[float]        文本向量化
+- embed_batch(texts)                批量文本向量化
 
-统一接口：
-- chat(messages, **kwargs) -> str：对话补全
-- embed(text) -> list[float]：文本向量化（Embedding）
+实现全部委托给 app.llm.factory 创建的 LangChain ChatModel / Embeddings，
+因此 provider（OpenAI / DeepSeek / Claude）、超时、重试、连接复用只有一条路径，
+不会再出现两套并行实现行为不一致的问题。
 
-所有调用基于 httpx.AsyncClient，完全异步，支持超时控制。
-当 LLM 不可用时抛出 LLMError，由上层捕获并触发降级兜底。
-
-LLM_BACKEND=langchain（默认）时，chat / embed / embed_batch 委托给
-app.llm.factory 创建的 LangChain ChatModel / Embeddings；
-LLM_BACKEND=httpx 时使用下方保留的原自研 HTTP 实现。
+配置不在这里：运行时切换与读取由 app.llm.config.LLMRuntimeConfig 负责，
+本类只是它 + 模型工厂的一个便捷调用入口。
+调用失败统一抛 LLMError，由上层捕获并触发降级兜底。
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-import json
-import httpx
-
-from app.config import Settings, get_settings
-from app.core.context import get_request_context
+from app.llm.config import LLMRuntimeConfig, get_llm_config
 
 logger = logging.getLogger(__name__)
 
@@ -35,39 +29,21 @@ class LLMError(Exception):
 
 
 class LLMClient:
-    """统一 LLM 客户端。
-
-    通过 settings.llm_provider 切换 OpenAI / Claude / DeepSeek 后端。
-    支持运行时通过 switch_model() 切换模型，无需重启。
+    """统一 LLM 客户端（单一 LangChain 后端）。
 
     Usage:
-        client = LLMClient(settings)
+        client = get_llm_client()
         reply = await client.chat([{"role": "user", "content": "你好"}])
         vector = await client.embed("你好")
 
-        # 运行时切换
+        # 运行时切换（管理员接口）
         client.switch_model(provider="openai", api_key="sk-...")
     """
 
-    def __init__(self, settings: Optional[Settings] = None) -> None:
-        self._settings: Settings = settings or get_settings()
-        self._http: Optional[httpx.AsyncClient] = None
-        # 运行时覆盖（优先级高于 settings），由 API /models/switch 修改
-        self._runtime: Dict[str, Any] = {}
+    def __init__(self, config: Optional[LLMRuntimeConfig] = None) -> None:
+        self.config: LLMRuntimeConfig = config or get_llm_config()
 
-    # 运行时配置（API /models/switch 调用）
-
-    def _rc(self, key: str, default: Any = None) -> Any:
-        """读取配置：runtime > settings > default。
-
-        deepseek_model / claude_model 在 runtime 中缺省时回退到 llm_model，
-        这样 switch_model(model=...) 对所有 provider 都生效。
-        """
-        if key in self._runtime:
-            return self._runtime[key]
-        if key in ("deepseek_model", "claude_model") and "llm_model" in self._runtime:
-            return self._runtime["llm_model"]
-        return getattr(self._settings, key, default)
+    # ---- 运行时配置（透传给 config 对象）----
 
     def switch_model(
         self,
@@ -76,81 +52,19 @@ class LLMClient:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """运行时切换 LLM 提供商 / 模型 / 密钥 / base_url。
-
-        只更新传入的字段，未传的保留当前值（runtime 或 settings）。
-        传空字符串 "" 表示清空 runtime 覆盖，回退到 settings。
-        """
-        overrides = {
-            "llm_provider": provider,
-            "llm_model": model,
-            "llm_api_key": api_key,
-            "llm_base_url": base_url,
-        }
-        for k, v in overrides.items():
-            if v is not None:
-                if v == "":
-                    self._runtime.pop(k, None)
-                else:
-                    self._runtime[k] = v
-        logger.info("LLM 运行时切换: %s", self.get_config())
-        return self.get_config()
+        return self.config.switch(
+            provider=provider, model=model, api_key=api_key, base_url=base_url
+        )
 
     def get_config(self) -> Dict[str, Any]:
         """返回当前生效的 LLM 配置（含 runtime 覆盖）。"""
-        provider = self._rc("llm_provider", "openai").lower()
-        base = {
-            "provider": provider,
-            "api_key_prefix": self._rc("llm_api_key", "")[:8] + "..." if self._rc("llm_api_key") else "(empty)",
-            "timeout_s": self._rc("llm_timeout", 60),
-            "embedding_api_key_set": bool(self._rc("embedding_api_key")),
-            "backend": self._rc("llm_backend", "langchain"),
-        }
-        if provider == "deepseek":
-            base["model"] = self._rc("deepseek_model")
-            base["base_url"] = self._rc("deepseek_base_url")
-        elif provider == "claude":
-            base["model"] = self._rc("claude_model")
-            base["base_url"] = self._rc("anthropic_base_url")
-        else:
-            base["model"] = self._rc("llm_model")
-            base["base_url"] = self._rc("llm_base_url")
-        return base
+        return self.config.snapshot()
 
     def reset_runtime(self) -> None:
         """清空所有运行时覆盖，回退到 settings。"""
-        self._runtime.clear()
-        logger.info("LLM 运行时配置已重置")
+        self.config.reset()
 
-    # 生命周期管理
-
-    async def connect(self) -> None:
-        """初始化 HTTP 连接池。"""
-        if self._http is None:
-            self._http = httpx.AsyncClient(
-                timeout=httpx.Timeout(self._settings.llm_timeout),
-                limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
-            )
-            logger.info(
-                "LLM 客户端已初始化，provider=%s model=%s",
-                self._rc("llm_provider"), self.get_config().get("model"),
-            )
-
-    async def close(self) -> None:
-        """关闭 HTTP 连接池。"""
-        if self._http is not None:
-            await self._http.aclose()
-            self._http = None
-            logger.info("LLM 客户端已关闭")
-
-    @property
-    def http(self) -> httpx.AsyncClient:
-        """获取已初始化的 HTTP 客户端，未初始化时抛出异常。"""
-        if self._http is None:
-            raise LLMError("LLM 客户端未初始化，请先调用 connect()")
-        return self._http
-
-    # 对话补全
+    # ---- 对话补全 ----
 
     async def chat(
         self,
@@ -162,57 +76,14 @@ class LLMClient:
         """对话补全，返回 LLM 生成的文本。
 
         Args:
-            messages: 对话消息列表，格式为 [{"role": "user", "content": "..."}]
-            temperature: 采样温度，越高越发散
+            messages: [{"role": "user", "content": "..."}]
+            temperature: 采样温度
             max_tokens: 最大生成 token 数
             system: 系统提示词（可选）
 
-        Returns:
-            LLM 生成的回复文本
-
         Raises:
-            LLMError: 调用失败时抛出，上层捕获后触发降级
+            LLMError: 调用失败，由上层捕获后触发降级。
         """
-        if self._use_langchain():
-            return await self._chat_langchain(messages, temperature, max_tokens, system)
-
-        provider = self._rc("llm_provider", "openai").lower()
-        override = get_request_context().model_override
-        try:
-            if provider == "claude":
-                return await self._chat_claude(
-                    messages, temperature, max_tokens, system
-                )
-            elif provider == "deepseek":
-                return await self._chat_openai(
-                    messages, temperature, max_tokens, system,
-                    base_url=self._rc("deepseek_base_url"),
-                    model=override or self._rc("deepseek_model"),
-                )
-            else:
-                return await self._chat_openai(
-                    messages, temperature, max_tokens, system,
-                    model=override,
-                )
-        except httpx.HTTPError as exc:
-            logger.error("LLM 对话请求网络错误: %s", exc)
-            raise LLMError(f"LLM 网络错误: {exc}") from exc
-        except Exception as exc:
-            logger.error("LLM 对话请求失败: %s", exc)
-            raise LLMError(f"LLM 调用失败: {exc}") from exc
-
-    def _use_langchain(self) -> bool:
-        """是否使用 LangChain 后端（LLM_BACKEND=langchain，默认）。"""
-        return str(self._rc("llm_backend", "langchain") or "langchain").lower() == "langchain"
-
-    async def _chat_langchain(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float,
-        max_tokens: int,
-        system: Optional[str],
-    ) -> str:
-        """通过 LangChain ChatModel 完成对话（自动应用请求级模型覆盖）。"""
         from app.llm.factory import get_chat_model
         from app.llm.messages import message_text, to_langchain_messages
 
@@ -220,374 +91,36 @@ class LLMClient:
             model = get_chat_model(temperature=temperature, max_tokens=max_tokens)
             result = await model.ainvoke(to_langchain_messages(messages, system))
             return message_text(result)
-        except Exception as exc:
-            logger.error("LLM 对话请求失败(langchain): %s", exc)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("LLM 对话请求失败: %s", exc)
             raise LLMError(f"LLM 调用失败: {exc}") from exc
 
-    async def _chat_openai(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float,
-        max_tokens: int,
-        system: Optional[str],
-        base_url: Optional[str] = None,
-        model: Optional[str] = None,
-    ) -> str:
-        """OpenAI 兼容协议的对话补全（也用于 DeepSeek 等兼容服务）。"""
-        full_messages: List[Dict[str, str]] = []
-        if system:
-            full_messages.append({"role": "system", "content": system})
-        full_messages.extend(messages)
-
-        payload: Dict[str, Any] = {
-            "model": model or self._rc("llm_model"),
-            "messages": full_messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-        headers = self._openai_headers()
-        url_base = base_url or self._rc("llm_base_url")
-        url = f"{url_base.rstrip('/')}/chat/completions"
-
-        resp = await self.http.post(url, json=payload, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
-
-    async def _chat_claude(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float,
-        max_tokens: int,
-        system: Optional[str],
-    ) -> str:
-        """Anthropic Claude 协议的对话补全。"""
-        # Claude 的 system 消息是顶层参数，不在 messages 中
-        payload: Dict[str, Any] = {
-            "model": self._rc("claude_model"),
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-        if system:
-            payload["system"] = system
-
-        headers = self._claude_headers()
-        url = f"{self._rc('anthropic_base_url').rstrip('/')}/messages"
-
-        resp = await self.http.post(url, json=payload, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
-        # Claude 返回 content 是列表，取第一段文本
-        return data["content"][0]["text"]
-
-    # 文本向量化
+    # ---- 文本向量化 ----
 
     async def embed(self, text: str) -> List[float]:
-        """文本向量化，返回 embedding 浮点向量。
+        """文本向量化。
 
-        统一使用 OpenAI 兼容的 embeddings 接口。
-        当 provider 为 deepseek/claude 且未配置 EMBEDDING_API_KEY 时，
-        会在日志警告后尝试回退（可能 401），建议配置独立的 embedding 服务。
+        统一走 EMBEDDING_PROVIDER：openai 兼容接口，或 local（ChromaDB 内置模型）。
         """
-        if self._use_langchain():
-            from app.llm.factory import get_embeddings
-
-            try:
-                return await get_embeddings().aembed_query(text)
-            except Exception as exc:
-                logger.error("Embedding 请求失败(langchain): %s", exc)
-                raise LLMError(f"Embedding 失败: {exc}") from exc
+        from app.llm.factory import get_embeddings
 
         try:
-            provider = self._rc("llm_provider", "openai").lower()
-            embed_key = self._rc("embedding_api_key", "")
-            if not embed_key and provider in ("deepseek", "claude"):
-                logger.warning(
-                    "Embedding: provider=%s 不支持 embedding 且未配置 EMBEDDING_API_KEY。"
-                    "将用 llm_api_key + llm_base_url 尝试（可能因 key 不匹配而 401）。"
-                    "建议在 .env 设置 EMBEDDING_API_KEY / EMBEDDING_BASE_URL。",
-                    provider,
-                )
-            payload = {
-                "model": self._rc("embedding_model"),
-                "input": text,
-            }
-            headers = self._embed_headers()
-            url = f"{self._embed_base_url().rstrip('/')}/embeddings"
-
-            resp = await self.http.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-            return data["data"][0]["embedding"]
-        except Exception as exc:
+            return await get_embeddings().aembed_query(text)
+        except Exception as exc:  # noqa: BLE001
             logger.error("Embedding 请求失败: %s", exc)
             raise LLMError(f"Embedding 失败: {exc}") from exc
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        """批量文本向量化。
-
-        Args:
-            texts: 待向量化的文本列表
-
-        Returns:
-            embedding 向量列表，与输入顺序一致
-        """
-        if self._use_langchain():
-            from app.llm.factory import get_embeddings
-
-            if not texts:
-                return []
-            try:
-                return await get_embeddings().aembed_documents(list(texts))
-            except Exception as exc:
-                logger.error("批量 Embedding 请求失败(langchain): %s", exc)
-                raise LLMError(f"批量 Embedding 失败: {exc}") from exc
+        """批量文本向量化，返回顺序与输入一致。"""
+        if not texts:
+            return []
+        from app.llm.factory import get_embeddings
 
         try:
-            payload = {
-                "model": self._rc("embedding_model"),
-                "input": texts,
-            }
-            headers = self._embed_headers()
-            url = f"{self._embed_base_url().rstrip('/')}/embeddings"
-
-            resp = await self.http.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-            # 按 index 排序确保顺序一致
-            sorted_data = sorted(data["data"], key=lambda x: x["index"])
-            return [item["embedding"] for item in sorted_data]
-        except Exception as exc:
+            return await get_embeddings().aembed_documents(list(texts))
+        except Exception as exc:  # noqa: BLE001
             logger.error("批量 Embedding 请求失败: %s", exc)
             raise LLMError(f"批量 Embedding 失败: {exc}") from exc
-
-    # 内部辅助
-
-    def _openai_headers(self) -> Dict[str, str]:
-        """构建 OpenAI 请求头。"""
-        return {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self._rc('llm_api_key', '')}",
-        }
-
-    def _embed_base_url(self) -> str:
-        """Embedding 专用 base_url，留空回退 llm_base_url。"""
-        return self._rc("embedding_base_url") or self._rc("llm_base_url", "")
-
-    def _embed_headers(self) -> Dict[str, str]:
-        """Embedding 专用请求头，api_key 留空回退 llm_api_key。
-
-        DeepSeek 不支持 embedding：LLM_PROVIDER=deepseek 时应配置
-        EMBEDDING_API_KEY / EMBEDDING_BASE_URL 指向支持 embedding 的服务。
-        """
-        key = self._rc("embedding_api_key") or self._rc("llm_api_key", "")
-        return {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {key}",
-        }
-
-    def _claude_headers(self) -> Dict[str, str]:
-        """构建 Anthropic Claude 请求头。"""
-        return {
-            "Content-Type": "application/json",
-            "x-api-key": self._rc("llm_api_key", ""),
-            "anthropic-version": "2023-06-01",
-        }
-
-    # ---- Function Calling 支持 ----
-
-    async def chat_with_tools(
-        self,
-        messages: List[Dict[str, Any]],
-        *,
-        system: Optional[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[str]]] = None,
-        temperature: float = 0.5,
-        max_tokens: int = 2048,
-        max_tool_rounds: int = 4,
-    ) -> str:
-        """带 Function Calling 的对话补全。
-
-        循环：把 tools 交给模型 -> 若返回 tool_calls 则逐个执行并回填 ->
-        再让模型生成最终文本；直到没有 tool_calls 或达到 max_tool_rounds。
-        """
-        provider = self._rc("llm_provider", "openai").lower()
-        if not tools:
-            return await self.chat(
-                messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                system=system,
-            )
-        if tool_executor is None:
-            raise ValueError("启用 function calling 时必须提供 tool_executor")
-
-        msgs: List[Dict[str, Any]] = [dict(m) for m in messages]
-        last_text: str = ""
-
-        for _ in range(max_tool_rounds):
-            if provider == "claude":
-                data = await self._completion_claude(
-                    msgs, system, temperature, max_tokens, tools
-                )
-                content, tool_calls = _extract_claude(data)
-            else:
-                data = await self._completion_openai(
-                    msgs, system, temperature, max_tokens, tools
-                )
-                content, tool_calls = _extract_openai(data)
-
-            if content:
-                last_text = content
-
-            if not tool_calls:
-                return content if content else last_text
-
-            executed: List[tuple] = []
-            for tc in tool_calls:
-                try:
-                    result = await tool_executor(tc["name"], tc["arguments"])
-                except Exception as exc:  # noqa: BLE001
-                    result = f"工具执行失败: {exc}"
-                executed.append((tc["id"], result))
-
-            if provider == "claude":
-                msgs.append(_claude_assistant_tool_calls(content, tool_calls))
-                blocks = [
-                    {"type": "tool_result", "tool_use_id": tid, "content": res}
-                    for tid, res in executed
-                ]
-                msgs.append({"role": "user", "content": blocks})
-            else:
-                msgs.append(_openai_assistant_tool_calls(content, tool_calls))
-                for tid, res in executed:
-                    msgs.append({"role": "tool", "tool_call_id": tid, "content": res})
-
-        return last_text
-
-    async def _completion_openai(
-        self,
-        messages: List[Dict[str, Any]],
-        system: Optional[str],
-        temperature: float,
-        max_tokens: int,
-        tools: Optional[List[Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        provider = self._rc("llm_provider", "openai").lower()
-        model = self._rc("deepseek_model") if provider == "deepseek" else self._rc("llm_model")
-        base_url = self._rc("deepseek_base_url") if provider == "deepseek" else self._rc("llm_base_url")
-
-        full_messages: List[Dict[str, Any]] = []
-        if system:
-            full_messages.append({"role": "system", "content": system})
-        full_messages.extend(messages)
-
-        payload: Dict[str, Any] = {
-            "model": model,
-            "messages": full_messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-        if tools:
-            payload["tools"] = tools
-
-        url = f"{base_url.rstrip('/')}/chat/completions"
-        resp = await self.http.post(url, json=payload, headers=self._openai_headers())
-        resp.raise_for_status()
-        return resp.json()
-
-    async def _completion_claude(
-        self,
-        messages: List[Dict[str, Any]],
-        system: Optional[str],
-        temperature: float,
-        max_tokens: int,
-        tools: Optional[List[Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {
-            "model": self._rc("claude_model"),
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-        if system:
-            payload["system"] = system
-        if tools:
-            payload["tools"] = [_to_claude_tool(t) for t in tools]
-
-        url = f"{self._rc('anthropic_base_url').rstrip('/')}/messages"
-        resp = await self.http.post(url, json=payload, headers=self._claude_headers())
-        resp.raise_for_status()
-        return resp.json()
-
-
-# ---- Function Calling 的工具函数（OpenAI 兼容 + Claude 翻译）----
-
-
-def _extract_openai(data: Dict[str, Any]):
-    message = data["choices"][0]["message"]
-    content = message.get("content")
-    tool_calls = []
-    for tc in message.get("tool_calls") or []:
-        fn = tc.get("function", {})
-        raw = fn.get("arguments") or "{}"
-        try:
-            args = json.loads(raw) if isinstance(raw, str) else raw
-        except Exception:  # noqa: BLE001
-            args = {}
-        tool_calls.append({"id": tc.get("id"), "name": fn.get("name"), "arguments": args})
-    return content, tool_calls or None
-
-
-def _extract_claude(data: Dict[str, Any]):
-    blocks = data.get("content", [])
-    texts = [b.get("text", "") for b in blocks if b.get("type") == "text"]
-    content = "".join(texts) or None
-    tool_calls = []
-    for b in blocks:
-        if b.get("type") == "tool_use":
-            tool_calls.append(
-                {"id": b.get("id"), "name": b.get("name"), "arguments": b.get("input") or {}}
-            )
-    return content, tool_calls or None
-
-
-def _to_claude_tool(t: Dict[str, Any]) -> Dict[str, Any]:
-    fn = t.get("function", t)
-    return {
-        "name": fn["name"],
-        "description": fn.get("description", ""),
-        "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
-    }
-
-
-def _openai_assistant_tool_calls(content: Optional[str], tool_calls) -> Dict[str, Any]:
-    tcs = [
-        {
-            "id": tc["id"],
-            "type": "function",
-            "function": {
-                "name": tc["name"],
-                "arguments": json.dumps(tc["arguments"], ensure_ascii=False),
-            },
-        }
-        for tc in tool_calls
-    ]
-    return {"role": "assistant", "content": content, "tool_calls": tcs}
-
-
-def _claude_assistant_tool_calls(content: Optional[str], tool_calls) -> Dict[str, Any]:
-    blocks: List[Dict[str, Any]] = []
-    if content:
-        blocks.append({"type": "text", "text": content})
-    for tc in tool_calls:
-        blocks.append({"type": "tool_use", "id": tc["id"], "name": tc["name"], "input": tc["arguments"]})
-    return {"role": "assistant", "content": blocks}
-
-
-
 
 
 # 全局单例

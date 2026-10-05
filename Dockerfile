@@ -14,8 +14,11 @@ RUN apt-get update && \
         && rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件并安装
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# INSTALL_EXTRAS=0 可跳过可选能力（Claude / MCP / PostgreSQL / PDF·DOCX），构建更精简的镜像
+COPY requirements.txt requirements-extras.txt ./
+ARG INSTALL_EXTRAS=1
+RUN pip install --no-cache-dir -r requirements.txt && \
+    if [ "$INSTALL_EXTRAS" = "1" ]; then pip install --no-cache-dir -r requirements-extras.txt; fi
 
 # 复制应用代码与内置插件
 COPY app/ ./app/

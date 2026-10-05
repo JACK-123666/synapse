@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from langchain_core.tools import BaseTool
 
 from app.agents.base import AgentContext
-from app.agents.langchain_agent import LangChainAgent, format_recall
+from app.agents.langchain_agent import LangChainAgent, clear_agent_cache
 from app.capabilities.base import Capability, CapabilityTool
 from app.intent.catalog import IntentSpec, get_intent_catalog
 from app.router.pool import get_agent_registry
@@ -33,20 +33,17 @@ class ToolsetAgent(LangChainAgent):
         self.agent_id = f"{capability.name}_agent"
         self.description = capability.description or capability.name
         self.tool_tags = (capability_tag(capability.name),)
-        self._intent_lines = "\n".join(f"- {i.description}" for i in intents)
-
-    def build_system_prompt(self, context: AgentContext) -> str:
+        intent_lines = "\n".join(f"- {i.description}" for i in intents)
         parts: List[str] = [
             f"你是 Synapse 智能助手中负责「{self.description}」的助手。",
-            f"你擅长处理以下类型的请求：\n{self._intent_lines}" if self._intent_lines else "",
+            f"你擅长处理以下类型的请求：\n{intent_lines}" if intent_lines else "",
             "请优先调用可用工具获取真实结果，不要编造；工具出错时如实告知用户。",
         ]
-        recall_text = format_recall(context.long_term_recall)
-        if recall_text:
-            parts.append(f"\n【历史相关摘要】\n{recall_text}")
-        if context.user_profile_context:
-            parts.append(f"\n【用户画像】\n{context.user_profile_context}")
-        return "\n".join(p for p in parts if p)
+        # 静态提示词：记忆召回 / 用户画像由 build_context_block 注入消息序列
+        self._system_prompt = "\n".join(p for p in parts if p)
+
+    def build_system_prompt(self, context: AgentContext) -> str:
+        return self._system_prompt
 
 
 @dataclass
@@ -131,6 +128,8 @@ class CapabilityManager:
             record.route_intents.append(intent)
 
         self._registered[capability.name] = record
+        # 工具集变了，缓存的 Agent 图持有的是旧工具对象，必须作废
+        clear_agent_cache()
         try:
             await capability.startup()
         except Exception as exc:  # noqa: BLE001
@@ -159,6 +158,8 @@ class CapabilityManager:
             agent_registry.unregister_route(intent)
         for agent_id in record.agent_ids:
             agent_registry.unregister_agent(agent_id)
+        # 工具已下线，缓存的 Agent 图必须作废
+        clear_agent_cache()
         logger.info("能力管理器: 已注销 '%s'", name)
 
     async def shutdown_all(self) -> None:

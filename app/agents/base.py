@@ -74,7 +74,8 @@ class BaseAgent(ABC):
     """Agent 抽象基类。
 
     所有 Agent 必须实现 execute 方法，接收 AgentContext，返回 AgentResponse。
-    可选实现 health_check 方法，供路由调度器检查健康状态。
+    可覆写 stream 方法实现流式输出；健康状态由 observability.health 的
+    异常检测器根据实际请求耗时统一判定，Agent 无需自行上报。
 
     Attributes:
         agent_id: Agent 唯一标识，用于路由注册、指标上报、异常检测
@@ -98,13 +99,6 @@ class BaseAgent(ABC):
             异常应由上层 dispatcher 捕获并触发降级
         """
         ...
-
-    async def health_check(self) -> bool:
-        """健康检查，默认返回 True。
-
-        子类可覆写此方法实现自定义健康检查逻辑。
-        """
-        return True
 
     async def stream(self, context: AgentContext) -> AsyncIterator[Dict[str, Any]]:
         """流式执行，默认实现：执行完整逻辑后一次性输出。

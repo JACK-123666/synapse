@@ -142,11 +142,12 @@ app/
 ├── config.py               All configurable parameters
 ├── store.py                Redis / ChromaDB connection singletons
 ├── api/                    chat (incl. /chat/stream), system, auth, knowledge, memory, repos, schedules, plugins
-├── core/                   Request context, database, security (JWT / API keys / encryption), auth dependencies
+├── core/                   Request context, database, security (JWT / API keys / encryption), auth dependencies, background-task supervision
 ├── models/                 ORM: users, knowledge bases, repo connections, schedules, plugin state, ...
 ├── services/               Chat orchestration, users, tool policies
 ├── llm/
-│   ├── gateway.py          Unified LLM client (runtime switching, httpx fallback backend kept)
+│   ├── config.py           Runtime LLM config (runtime override > .env)
+│   ├── gateway.py          Unified LLM entry point (chat / embed, single LangChain backend)
 │   └── factory.py          LangChain ChatModel / Embeddings factory
 ├── intent/                 Three-way fusion + dynamic intent catalog (catalog.py)
 ├── router/                 Agent registry, dispatch & failover (incl. streaming)
@@ -189,7 +190,7 @@ To write just an agent: subclass `LangChainAgent` and set `tool_tags` and `build
 
 ```bash
 python -m venv .venv && .venv/Scripts/activate     # Python 3.10 / 3.11 (chromadb 0.4.24 needs numpy<2)
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # core + test deps (run the app: requirements.txt)
 pytest                                              # Redis / Chroma / LLM all replaced by local fakes
 python tools/eval_intent.py --no-llm                # intent-recognition evaluation
 python tools/eval_memory.py                         # memory token evaluation
