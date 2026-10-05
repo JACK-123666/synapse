@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Synapse · 智能对话</title>
+<title>Synapse · 全能智能助手</title>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
   :root {
@@ -136,6 +136,24 @@
   .input-area button:hover { opacity:.9; transform:translateY(-1px); }
   .input-area button:disabled { opacity:.4; cursor:not-allowed; transform:none; }
 
+  /* Tools / Sources */
+  .msg .tool-line { font-size:12px; color:var(--text2); margin:2px 0 6px; display:flex; flex-wrap:wrap; gap:6px; }
+  .msg .tool-chip { background:var(--surface2); border:1px solid var(--border); padding:1px 8px; border-radius:10px; }
+  .msg .tool-chip.done { border-color:var(--success); }
+  .msg .sources { margin-top:8px; padding-top:8px; border-top:1px dashed var(--border); font-size:12px; color:var(--text2); }
+  .msg .sources div { margin:2px 0; }
+  .msg .sources a { color:#818cf8; }
+
+  /* Login */
+  .login-mask { position:fixed; inset:0; background:rgba(5,5,15,.75); display:none; align-items:center; justify-content:center; z-index:20; }
+  .login-mask.show { display:flex; }
+  .login-box { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:28px; width:320px; display:flex; flex-direction:column; gap:12px; }
+  .login-box h3 { font-size:16px; margin-bottom:4px; }
+  .login-box input { padding:9px 12px; background:var(--bg); border:1px solid var(--border); border-radius:8px; color:var(--text); font-size:13px; outline:none; }
+  .login-box input:focus { border-color:var(--accent); }
+  .login-box button { padding:9px; background:linear-gradient(135deg,#6366f1,#8b5cf6); color:#fff; border:none; border-radius:8px; font-size:14px; cursor:pointer; }
+  .login-box .err { color:#f87171; font-size:12px; min-height:16px; }
+
   /* Toast */
   .toast { position:fixed; bottom:80px; left:50%; transform:translateX(-50%); background:var(--surface2); border:1px solid var(--border); padding:8px 20px; border-radius:20px; font-size:12px; color:var(--text2); z-index:10; animation:toastIn .3s ease; pointer-events:none; }
   @keyframes toastIn { from{opacity:0;transform:translateX(-50%) translateY(12px)} }
@@ -173,7 +191,19 @@
       <a href="/docs" target="_blank">API</a>
       <a href="/health" target="_blank">健康</a>
       <a href="/metrics" target="_blank">指标</a>
+      <a href="#" id="logoutLink" style="display:none" onclick="logout();return false;">退出</a>
     </div>
+  </div>
+</div>
+
+<!-- Login -->
+<div class="login-mask" id="loginMask">
+  <div class="login-box">
+    <h3>登录 Synapse</h3>
+    <input id="loginUser" placeholder="用户名" autocomplete="username">
+    <input id="loginPass" type="password" placeholder="密码" autocomplete="current-password">
+    <div class="err" id="loginErr"></div>
+    <button onclick="login()">登录</button>
   </div>
 </div>
 
@@ -189,12 +219,14 @@
   <div class="welcome">
     <div class="logo">🧠</div>
     <h2>你好，我是 Synapse</h2>
-    <p>基于多 Agent 的智能对话平台<br>支持知识检索 · 文档摘要 · 联网搜索 · 长期记忆</p>
+    <p>基于多 Agent 的全能智能助手<br>知识库问答 · 记忆检索 · 网页抓取 · 代码仓库 · 定时任务 · 插件扩展</p>
     <div class="chips">
       <div class="chip" onclick="quickAsk('什么是向量数据库？它和传统数据库有什么区别？')">🔍 什么是向量数据库？</div>
       <div class="chip" onclick="quickAsk('最近有哪些重要的 AI 新闻？')">🌐 最近 AI 新闻</div>
-      <div class="chip" onclick="quickAsk('Python 和 Rust 各有什么优缺点？')">🐍 Python vs Rust</div>
-      <div class="chip" onclick="quickAsk('推荐 3 本入门机器学习的书')">📚 机器学习入门书</div>
+      <div class="chip" onclick="quickAsk('帮我总结一下这个网页：https://www.python.org/about/')">🔗 总结网页</div>
+      <div class="chip" onclick="quickAsk('我上次问你的问题是什么？')">🧠 回忆对话</div>
+      <div class="chip" onclick="quickAsk('列出我连接的代码仓库，并看看最近的提交')">📦 仓库提交</div>
+      <div class="chip" onclick="quickAsk('每天早上 9 点帮我总结 AI 新闻')">⏰ 定时任务</div>
     </div>
   </div>
 </div>
@@ -208,6 +240,7 @@
 <script>
 // ==================== State ====================
 const api = '/chat';
+const streamApi = '/chat/stream';
 const chatArea = document.getElementById('chatArea');
 const msgInput = document.getElementById('msgInput');
 const sendBtn = document.getElementById('sendBtn');
@@ -216,11 +249,76 @@ const modelSelect = document.getElementById('modelSelect');
 const searchToggle = document.getElementById('searchToggle');
 let empty = true;
 let webSearchEnabled = true;
+// 普通用户无权切换全局模型时，选择的模型只作用于自己的请求
+let requestModel = '';
+let authEnabled = false;
+let authToken = localStorage.getItem('synapse_token') || '';
+
+// ==================== Auth ====================
+function authHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  if (authToken) h['Authorization'] = 'Bearer ' + authToken;
+  return h;
+}
+
+async function authFetch(url, options) {
+  const opts = Object.assign({}, options || {});
+  opts.headers = authHeaders(opts.headers);
+  const res = await fetch(url, opts);
+  if (res.status === 401 && authEnabled) { showLogin(); }
+  return res;
+}
+
+function showLogin() { document.getElementById('loginMask').classList.add('show'); document.getElementById('loginUser').focus(); }
+function hideLogin() { document.getElementById('loginMask').classList.remove('show'); }
+
+async function login() {
+  const username = document.getElementById('loginUser').value.trim();
+  const password = document.getElementById('loginPass').value;
+  const err = document.getElementById('loginErr');
+  err.textContent = '';
+  try {
+    const res = await fetch('/auth/login', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username, password}),
+    });
+    const data = await res.json();
+    if (!res.ok) { err.textContent = data.detail || '登录失败'; return; }
+    authToken = data.access_token;
+    localStorage.setItem('synapse_token', authToken);
+    hideLogin();
+    document.getElementById('logoutLink').style.display = '';
+    showToast(`欢迎，${data.user.username}`);
+    loadModels();
+  } catch (e) { err.textContent = '无法连接服务器'; }
+}
+
+function logout() {
+  authToken = '';
+  localStorage.removeItem('synapse_token');
+  document.getElementById('logoutLink').style.display = 'none';
+  showLogin();
+}
+
+document.getElementById('loginPass').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
 
 // ==================== Init ====================
 (async function init() {
   try {
-    const res = await fetch('/models');
+    const res = await fetch('/auth/config');
+    authEnabled = (await res.json()).auth_enabled;
+  } catch (e) { authEnabled = false; }
+  if (authEnabled) {
+    if (!authToken) { showLogin(); }
+    else { document.getElementById('logoutLink').style.display = ''; }
+  }
+  loadModels();
+})();
+
+async function loadModels() {
+  try {
+    const res = await authFetch('/models');
+    if (!res.ok) { modelBadge.textContent = authEnabled ? '未登录' : '未连接'; return; }
     const cfg = await res.json();
     modelBadge.textContent = `${cfg.provider} / ${cfg.model}`;
     modelBadge.title = `base_url: ${cfg.base_url}\nembedding key: ${cfg.embedding_api_key_set ? '已配' : '未配'}`;
@@ -228,23 +326,33 @@ let webSearchEnabled = true;
       modelBadge.title += '\n⚠️ DeepSeek 不支持 embedding，长期记忆/知识检索依赖本地 ONNX';
     }
     // 填充模型选择器
-    const models = ['deepseek-chat', 'deepseek-reasoner', 'gpt-4o-mini', 'gpt-4o', 'gpt-3.5-turbo', 'claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307'];
-    models.forEach(m => { const o = document.createElement('option'); o.value = m; o.textContent = m; modelSelect.appendChild(o); });
+    if (modelSelect.options.length <= 1) {
+      const models = ['deepseek-chat', 'deepseek-reasoner', 'gpt-4o-mini', 'gpt-4o', 'gpt-3.5-turbo', 'claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307'];
+      models.forEach(m => { const o = document.createElement('option'); o.value = m; o.textContent = m; modelSelect.appendChild(o); });
+    }
   } catch(e) { modelBadge.textContent = '未连接'; }
-})();
+}
 
 // ==================== Search Toggle ====================
 function toggleSearch() { webSearchEnabled = searchToggle.checked; }
 
 // ==================== Model Switch ====================
 async function switchModel(model) {
-  if (!model) return;
+  if (!model) { requestModel = ''; loadModels(); return; }
   try {
-    const res = await fetch('/models/switch', {
+    const res = await authFetch('/models/switch', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({model})
     });
+    if (res.status === 403) {
+      // 非管理员：不修改全局配置，只对自己的请求生效
+      requestModel = model;
+      modelBadge.textContent = `${model}（仅本人）`;
+      showToast(`本人请求将使用 ${model}`);
+      return;
+    }
     const cfg = await res.json();
+    requestModel = '';
     modelBadge.textContent = `${cfg.provider} / ${cfg.model}`;
     showToast(`已切换至 ${cfg.model}`);
   } catch(e) { showToast('切换失败'); }
@@ -263,9 +371,42 @@ function addMsg(role, text, meta) {
   const avatar = role === 'user' ? '🧑' : '🤖';
   const body = role === 'assistant' ? renderMarkdown(text) : escapeHtml(text).replace(/\n/g,'<br>');
   const metaHtml = meta ? `<div class="meta">${meta.map(m => `<span class="intent-tag">${m}</span>`).join('')}</div>` : '';
-  div.innerHTML = `<div class="avatar">${avatar}</div><div><div class="bubble">${body}</div>${metaHtml}</div>`;
+  div.innerHTML = `<div class="avatar">${avatar}</div><div><div class="tool-line"></div><div class="bubble">${body}</div>${metaHtml}</div>`;
   chatArea.appendChild(div);
   chatArea.scrollTop = chatArea.scrollHeight;
+  return div;
+}
+
+function setMeta(div, meta) {
+  const holder = div.querySelector(':scope > div');
+  let el = holder.querySelector('.meta');
+  if (!el) { el = document.createElement('div'); el.className = 'meta'; holder.appendChild(el); }
+  el.innerHTML = meta.map(m => `<span class="intent-tag">${escapeHtml(String(m))}</span>`).join('');
+}
+
+function addToolChip(div, name, done) {
+  const line = div.querySelector('.tool-line');
+  let chip = [...line.querySelectorAll('.tool-chip')].find(c => c.dataset.name === name && !c.classList.contains('done'));
+  if (!chip) {
+    chip = document.createElement('span'); chip.className = 'tool-chip'; chip.dataset.name = name;
+    chip.textContent = `🔧 ${name}…`; line.appendChild(chip);
+  }
+  if (done) { chip.classList.add('done'); chip.textContent = `✅ ${name}`; }
+}
+
+function renderSources(div, data) {
+  const items = [];
+  (data.sources || []).forEach(s => {
+    const label = [s.kb, s.filename].filter(Boolean).join(' / ') || '知识库';
+    items.push(`📄 ${escapeHtml(label)}（相似度 ${(Number(s.score || 0) * 100).toFixed(0)}%）`);
+  });
+  (data.web_sources || []).forEach(s => {
+    items.push(`🌐 <a href="${encodeURI(s.url || '#')}" target="_blank" rel="noopener">${escapeHtml(s.title || s.url || '')}</a>`);
+  });
+  if (!items.length) return;
+  const el = document.createElement('div'); el.className = 'sources';
+  el.innerHTML = '<div>引用来源：</div>' + items.map(i => `<div>${i}</div>`).join('');
+  div.querySelector('.bubble').appendChild(el);
 }
 
 function addTyping() {
@@ -289,12 +430,14 @@ function renderWelcome() {
     <div class="welcome">
       <div class="logo">🧠</div>
       <h2>你好，我是 Synapse</h2>
-      <p>基于多 Agent 的智能对话平台<br>支持知识检索 · 文档摘要 · 联网搜索 · 长期记忆</p>
+      <p>基于多 Agent 的全能智能助手<br>知识库问答 · 记忆检索 · 网页抓取 · 代码仓库 · 定时任务 · 插件扩展</p>
       <div class="chips">
         <div class="chip" onclick="quickAsk('什么是向量数据库？它和传统数据库有什么区别？')">🔍 什么是向量数据库？</div>
         <div class="chip" onclick="quickAsk('最近有哪些重要的 AI 新闻？')">🌐 最近 AI 新闻</div>
-        <div class="chip" onclick="quickAsk('Python 和 Rust 各有什么优缺点？')">🐍 Python vs Rust</div>
-        <div class="chip" onclick="quickAsk('推荐 3 本入门机器学习的书')">📚 机器学习入门书</div>
+        <div class="chip" onclick="quickAsk('帮我总结一下这个网页：https://www.python.org/about/')">🔗 总结网页</div>
+        <div class="chip" onclick="quickAsk('我上次问你的问题是什么？')">🧠 回忆对话</div>
+        <div class="chip" onclick="quickAsk('列出我连接的代码仓库，并看看最近的提交')">📦 仓库提交</div>
+        <div class="chip" onclick="quickAsk('每天早上 9 点帮我总结 AI 新闻')">⏰ 定时任务</div>
       </div>
     </div>`;
   empty = true;
@@ -322,9 +465,93 @@ msgInput.addEventListener('input', () => {
   msgInput.style.height = Math.min(msgInput.scrollHeight, 100) + 'px';
 });
 
+function resultTags(data) {
+  return [`意图: ${data.intent}`, `Agent: ${data.agent_used}`, `置信: ${(data.confidence*100).toFixed(0)}%`];
+}
+
+function buildRequest(sid, msg) {
+  const body = { session_id: sid, message: msg };
+  if (requestModel) body.model = requestModel;
+  const headers = { 'Content-Type': 'application/json', 'X-Web-Search': webSearchEnabled ? '1' : '0' };
+  return { body, headers };
+}
+
+// 一次性请求（流式不可用时的回退）
+async function sendOnce(sid, msg) {
+  const { body, headers } = buildRequest(sid, msg);
+  const res = await authFetch(api, { method:'POST', headers, body: JSON.stringify(body) });
+  const data = await res.json();
+  removeTyping();
+  if (res.ok) {
+    const div = addMsg('assistant', data.reply, resultTags(data));
+    (data.tool_calls || []).forEach(t => addToolChip(div, t.name, true));
+    renderSources(div, data);
+  } else {
+    addMsg('assistant', `❌ ${data.detail || '请求失败，请重试'}`);
+  }
+}
+
+// 流式请求：解析 SSE（meta / token / tool_start / tool_end / done / error）
+async function sendStream(sid, msg) {
+  const { body, headers } = buildRequest(sid, msg);
+  const res = await authFetch(streamApi, { method:'POST', headers, body: JSON.stringify(body) });
+  if (!res.ok || !res.body) {
+    if (res.status === 401) { removeTyping(); addMsg('assistant', '🔒 请先登录'); return true; }
+    return false;
+  }
+  removeTyping();
+  const div = addMsg('assistant', '');
+  const bubble = div.querySelector('.bubble');
+  let text = '', pending = false, finished = false;
+  const render = () => {
+    pending = false;
+    bubble.innerHTML = renderMarkdown(text || '…');
+    chatArea.scrollTop = chatArea.scrollHeight;
+  };
+  const handle = (type, data) => {
+    if (type === 'meta') setMeta(div, [`意图: ${data.intent}`, `置信: ${(data.confidence*100).toFixed(0)}%`]);
+    else if (type === 'token') { text += data.content; if (!pending) { pending = true; requestAnimationFrame(render); } }
+    else if (type === 'tool_start') addToolChip(div, data.name, false);
+    else if (type === 'tool_end') addToolChip(div, data.name, true);
+    else if (type === 'done') {
+      finished = true;
+      text = data.reply || text; render();
+      setMeta(div, resultTags(data));
+      renderSources(div, data);
+    } else if (type === 'error') { finished = true; text += `\n\n❌ ${data.message}`; render(); }
+  };
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) >= 0) {
+        const raw = buffer.slice(0, idx); buffer = buffer.slice(idx + 2);
+        let type = 'message', dataLine = '';
+        raw.split('\n').forEach(line => {
+          if (line.startsWith('event:')) type = line.slice(6).trim();
+          else if (line.startsWith('data:')) dataLine += line.slice(5).trim();
+        });
+        if (dataLine) { try { handle(type, JSON.parse(dataLine)); } catch (e) { /* 忽略无法解析的事件 */ } }
+      }
+    }
+  } catch (e) {
+    // 已开始输出后连接中断：保留已生成的内容并提示，不再回退重发
+    text += '\n\n⚠️ 连接中断';
+  }
+  if (!finished) render();
+  return true;
+}
+
 async function send() {
   const msg = msgInput.value.trim();
   if (!msg) return;
+  if (authEnabled && !authToken) { showLogin(); return; }
   const sid = getSessionId();
   if (empty) { chatArea.innerHTML = ''; empty = false; }
   addMsg('user', msg);
@@ -333,21 +560,9 @@ async function send() {
   addTyping();
 
   try {
-    const body = { session_id: sid, message: msg };
-    const headers = { 'Content-Type': 'application/json', 'X-Web-Search': webSearchEnabled ? '1' : '0' };
-
-    const res = await fetch(api, {
-      method:'POST', headers,
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    removeTyping();
-    if (res.ok) {
-      const tags = [`意图: ${data.intent}`, `Agent: ${data.agent_used}`, `置信: ${(data.confidence*100).toFixed(0)}%`];
-      addMsg('assistant', data.reply, tags);
-    } else {
-      addMsg('assistant', `❌ ${data.detail || '请求失败，请重试'}`);
-    }
+    let ok = false;
+    try { ok = await sendStream(sid, msg); } catch (e) { ok = false; }
+    if (!ok) await sendOnce(sid, msg);
   } catch(e) {
     removeTyping();
     addMsg('assistant', '⚠️ 无法连接到服务器。请确认 docker compose up -d 已启动。\n\n终端运行：`docker compose up -d`');

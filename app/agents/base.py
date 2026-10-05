@@ -16,7 +16,7 @@ AgentResponse 包含回复文本和元数据（如检索到的知识来源等）
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -44,6 +44,14 @@ class AgentContext(BaseModel):
     long_term_recall: List[Dict[str, Any]] = Field(default_factory=list)
     user_profile_context: str = ""
     web_search: bool = True  # 是否允许联网搜索
+    # 本次请求临时指定的模型（只影响当前请求，不修改全局配置）
+    model_override: Optional[str] = None
+    # 当前用户角色，用于工具权限过滤
+    user_role: str = "admin"
+    # 额外限定的工具名列表（None 表示不额外限定）
+    allowed_tools: Optional[List[str]] = None
+    # 意图识别置信度（流式接口回传用）
+    intent_confidence: float = 0.0
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -97,3 +105,17 @@ class BaseAgent(ABC):
         子类可覆写此方法实现自定义健康检查逻辑。
         """
         return True
+
+    async def stream(self, context: AgentContext) -> AsyncIterator[Dict[str, Any]]:
+        """流式执行，默认实现：执行完整逻辑后一次性输出。
+
+        事件格式：
+            {"type": "token", "content": "..."}
+            {"type": "tool_start", "name": "...", "args": {...}}
+            {"type": "tool_end", "name": "...", "output": "..."}
+            {"type": "final", "response": AgentResponse}
+        """
+        response = await self.execute(context)
+        if response.reply:
+            yield {"type": "token", "content": response.reply}
+        yield {"type": "final", "response": response}

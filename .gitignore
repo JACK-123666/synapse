@@ -34,6 +34,12 @@ Thumbs.db
 # ChromaDB 本地持久化（Docker 模式下用卷）
 chroma_data/
 
+# 应用数据目录（SQLite、上传文件、仓库 clone、应用密钥）
+data/
+
+# 插件字节码缓存
+plugins/**/__pycache__/
+
 # Prometheus 数据
 prometheus_data/
 

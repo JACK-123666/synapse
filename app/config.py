@@ -89,6 +89,14 @@ class Settings(BaseSettings):
         description="Embedding 专用 base_url；留空回退 llm_base_url",
     )
     llm_timeout: int = Field(default=60, description="LLM 请求超时（秒）")
+    llm_backend: str = Field(
+        default="langchain",
+        description="LLM 调用后端：langchain（LangChain ChatModel）/ httpx（原自研 HTTP 实现）",
+    )
+    embedding_provider: str = Field(
+        default="openai",
+        description="Embedding 提供方：openai（OpenAI 兼容接口）/ local（ChromaDB 内置本地模型，无需 API Key）",
+    )
 
     # DeepSeek 专用配置（兼容 OpenAI 协议，base_url 指向 DeepSeek）
     deepseek_model: str = Field(
@@ -108,6 +116,63 @@ class Settings(BaseSettings):
         default=True,
         description="是否开启 /docs /redoc API 文档；生产环境建议设为 false",
     )
+    data_dir: str = Field(
+        default="data",
+        description="本地数据目录：SQLite 数据库、上传文件、仓库克隆、密钥文件",
+    )
+    database_url: str = Field(
+        default="",
+        description="数据库连接串；留空使用 data_dir 下的 SQLite。"
+        "企业部署可用 postgresql+asyncpg://user:pass@host/db",
+    )
+
+    # 鉴权与安全
+    auth_enabled: bool = Field(
+        default=False,
+        description="是否开启鉴权；关闭时所有请求视为本地管理员（个人部署）",
+    )
+    app_secret_key: str = Field(
+        default="",
+        description="应用密钥（JWT 签名、令牌加密）；留空自动生成并保存到 data_dir/.secret_key",
+    )
+    jwt_expire_minutes: int = Field(default=1440, description="JWT 有效期（分钟）")
+    admin_username: str = Field(default="admin", description="初始管理员用户名")
+    admin_password: str = Field(
+        default="",
+        description="初始管理员密码；留空则首次启动随机生成并打印到日志",
+    )
+
+    # 知识库（RAG）
+    rag_chunk_size: int = Field(default=800, description="文档切片长度（字符）")
+    rag_chunk_overlap: int = Field(default=120, description="切片重叠长度（字符）")
+    rag_top_k: int = Field(default=5, description="知识库检索 Top-K")
+    upload_max_mb: int = Field(default=20, description="单个上传文件大小上限（MB）")
+
+    # 网页抓取
+    web_fetch_timeout: float = Field(default=15.0, description="网页抓取超时（秒）")
+    web_fetch_max_bytes: int = Field(
+        default=2 * 1024 * 1024, description="网页抓取最大下载字节数"
+    )
+    web_allow_private: bool = Field(
+        default=False,
+        description="是否允许抓取内网地址（关闭可防 SSRF，企业内网部署按需开启）",
+    )
+
+    # 代码仓库助手
+    repo_write_enabled: bool = Field(
+        default=False,
+        description="是否全局允许仓库写操作（建 Issue、评论）；还需仓库连接单独开启",
+    )
+    repo_index_max_files: int = Field(default=300, description="仓库索引最多文件数")
+    repo_index_max_file_kb: int = Field(default=200, description="仓库索引单文件大小上限（KB）")
+
+    # 定时任务
+    scheduler_enabled: bool = Field(default=True, description="是否启用定时任务调度器")
+    scheduler_timezone: str = Field(default="Asia/Shanghai", description="定时任务时区")
+
+    # 插件
+    plugins_dir: str = Field(default="plugins", description="本地插件目录")
+    mcp_enabled: bool = Field(default=True, description="是否启用 MCP 插件接入")
 
     # 意图识别三路融合权重
     intent_llm_weight: float = Field(default=0.5, description="LLM 语义理解权重")
@@ -220,6 +285,19 @@ class Settings(BaseSettings):
             ],
         }
     )
+
+    def data_path(self, *parts: str) -> Path:
+        """返回 data_dir 下的路径，并确保父目录存在。"""
+        path = Path(self.data_dir).joinpath(*parts)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def resolved_database_url(self) -> str:
+        """数据库连接串：未配置时使用 data_dir 下的 SQLite。"""
+        if self.database_url:
+            return self.database_url
+        db_file = self.data_path("synapse.db").resolve()
+        return f"sqlite+aiosqlite:///{db_file.as_posix()}"
 
 
 @lru_cache

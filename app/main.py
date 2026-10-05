@@ -3,7 +3,8 @@
 负责：
 - 配置日志系统
 - 注册 API 路由
-- 启动/关闭事件：初始化各模块连接、注册 Agent 和路由
+- 生命周期（lifespan）：初始化各模块连接、数据库、注册能力 / 插件 / Agent / 路由、
+  启动异常检测与定时任务；关闭时按相反顺序释放资源
 - CORS 中间件
 
 启动方式：
@@ -12,15 +13,26 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from app.api.auth import router as auth_router
+from app.api.auth import users_router
 from app.api.chat import router as chat_router
+from app.api.knowledge import router as knowledge_router
+from app.api.memory import router as memory_router
+from app.api.plugins import router as plugins_router
+from app.api.repos import router as repos_router
+from app.api.schedules import router as schedules_router
+from app.api.system import router as system_router
 from app.config import get_settings
 
 # 日志配置
@@ -39,90 +51,40 @@ logging.basicConfig(
 # 降低第三方库的日志级别
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("chromadb").setLevel(logging.WARNING)
+logging.getLogger("apscheduler").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
-# FastAPI 应用实例
 
-_app_settings = get_settings()
-
-app = FastAPI(
-    title="Synapse · 智能对话平台",
-    description="""
-## 👋 欢迎使用 Synapse
-
-一个带**意图识别**、**记忆管理**和**故障自愈**的智能对话 API。
-
-### 怎么用
-
-1. 先调 `POST /chat` 发一条消息
-2. 拿到的 `session_id` 原样传回，就能多轮对话
-3. 随时调 `GET /health` 看各模块是否正常
-
-### 背后做了什么
-
-你说「那个怎么弄」→ 三路融合识别你要查文档还是闲聊 → 按 Agent 权重路由 →
-检索知识库 / 摘要历史 / 兜底回复 → 自动管理短期和长期记忆。
-
-全程有 Prometheus 盯着，哪个 Agent 慢了自动降权、摘除、恢复。
-""",
-    version="1.0.0",
-    docs_url="/docs" if _app_settings.docs_enabled else None,
-    redoc_url="/redoc" if _app_settings.docs_enabled else None,
-    swagger_ui_parameters={
-        "defaultModelsExpandDepth": -1,
-        "displayRequestDuration": True,
-        "filter": True,
-        "tryItOutEnabled": True,
-    },
-)
-
-# CORS 中间件：allow_origins=* 时浏览器禁止 credentials，故按配置动态决定
-_cors_origins = [o.strip() for o in _app_settings.cors_origins.split(",") if o.strip()]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_credentials="*" not in _cors_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# 注册路由（不设置顶层 tags，交给各自端点自行标记）
-app.include_router(chat_router, prefix="")
-
-# 静态文件 — 聊天首页
-app.mount("/", StaticFiles(directory="app/static", html=True), name="static")
-
-
-# 启动事件
-
-@app.on_event("startup")
 async def startup() -> None:
     """应用启动时初始化所有模块连接和配置。
 
     初始化顺序：
     1. 加载配置
     2. 连接 LLM 客户端
-    3. 初始化向量意图索引
-    4. 注册 Agent
-    5. 注册路由表
-    6. 启动异常检测后台任务
+    3. 预检 Redis / ChromaDB
+    4. 初始化数据库、初始管理员、工具白名单
+    5. 注册内置能力（Agent、工具、意图、路由）
+    6. 加载本地插件与 MCP 服务
+    7. 初始化向量意图索引（此时意图目录已完整）
+    8. 启动异常检测后台任务
     """
     settings = get_settings()
     logger.info("=" * 60)
-    logger.info("Synapse v1.0.0 正在启动...")
+    logger.info("Synapse v2.0.0 正在启动...")
     # 配置来源：docker 走 compose env_file 注入环境变量；本地开发走 .env 文件
     logger.info(
         "配置来源: %s",
         "环境变量(compose env_file 注入)" if os.environ.get("LLM_PROVIDER")
         else ".env 文件(本地开发)",
     )
-    logger.info("LLM Provider: %s, Model: %s",
-                settings.llm_provider, settings.llm_model)
+    logger.info("LLM Provider: %s, Model: %s, Backend: %s",
+                settings.llm_provider, settings.llm_model, settings.llm_backend)
     logger.info("LLM BaseURL: %s", settings.llm_base_url)
-    logger.info("LLM API Key: %s...", settings.llm_api_key[:8] if settings.llm_api_key else "(empty)")
+    logger.info("LLM API Key: %s", "已配置" if settings.llm_api_key else "(empty)")
     logger.info("DeepSeek URL: %s, Model: %s",
                 settings.deepseek_base_url, settings.deepseek_model)
+    logger.info("鉴权: %s", "开启" if settings.auth_enabled else "关闭（本地管理员模式）")
     logger.info("=" * 60)
 
     # LLM 客户端
@@ -138,19 +100,67 @@ async def startup() -> None:
     try:
         from app.store import get_redis
         redis = await get_redis()
-        await redis.ping()
+        await asyncio.wait_for(redis.ping(), timeout=5)
         logger.info("[OK] Redis 连接正常")
     except Exception as exc:  # noqa: BLE001
         logger.warning("[SKIP] Redis 不可用: %s", exc)
 
-    # 预检 ChromaDB
+    # 预检 ChromaDB（同步客户端，放到线程中执行）
     try:
         from app.store import get_chroma
-        chroma = get_chroma()
-        chroma.heartbeat()
+        chroma = await asyncio.to_thread(get_chroma)
+        await asyncio.to_thread(chroma.heartbeat)
         logger.info("[OK] ChromaDB 连接正常")
     except Exception as exc:  # noqa: BLE001
         logger.warning("[SKIP] ChromaDB 不可用: %s", exc)
+
+    # 数据库 + 初始管理员 + 工具白名单
+    try:
+        from app.core.db import init_db
+        from app.services.policies import load_tool_policies
+        from app.services.users import bootstrap_admin
+
+        await init_db()
+        await bootstrap_admin()
+        await load_tool_policies()
+        logger.info("[OK] 数据库已就绪")
+    except Exception as exc:  # noqa: BLE001
+        logger.error("[FAIL] 数据库初始化失败: %s", exc)
+
+    # 注册内置能力（Agent + 工具 + 意图 + 路由）
+    try:
+        from app.capabilities import builtin_capabilities
+        from app.capabilities.manager import get_capability_manager
+        from app.router.pool import get_agent_registry
+
+        manager = get_capability_manager()
+        for capability in builtin_capabilities():
+            try:
+                await manager.register(capability)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("[FAIL] 内置能力 '%s' 注册失败: %s", capability.name, exc)
+
+        registry = get_agent_registry()
+        logger.info("[OK] 已注册 %d 个 Agent", len(registry.get_all_agents()))
+        logger.info("[OK] 路由表已注册: %s", list(registry.get_routes()))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[SKIP] Agent/路由注册失败: %s", exc)
+
+    # 本地插件 + MCP
+    try:
+        from app.plugins.manager import get_plugin_manager
+        await get_plugin_manager().load_all()
+        logger.info("[OK] 本地插件已加载")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[SKIP] 本地插件加载失败: %s", exc)
+
+    if settings.mcp_enabled:
+        try:
+            from app.plugins.mcp import get_mcp_manager
+            await get_mcp_manager().load_all()
+            logger.info("[OK] MCP 服务已加载")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[SKIP] MCP 服务加载失败: %s", exc)
 
     # 初始化向量意图索引
     try:
@@ -160,45 +170,6 @@ async def startup() -> None:
         logger.info("[OK] 意图向量索引已就绪")
     except Exception as exc:  # noqa: BLE001
         logger.warning("[SKIP] 意图向量索引初始化失败: %s", exc)
-
-    # 注册 Agent + 路由表
-    try:
-        from app.router.pool import get_agent_registry
-        from app.agents.knowledge import RetrievalAgent
-        from app.agents.summary import SummarizationAgent
-        from app.agents.safety import FallbackAgent
-
-        registry = get_agent_registry()
-
-        retrieval = RetrievalAgent()
-        summarize = SummarizationAgent()
-        fallback = FallbackAgent()
-
-        registry.register_agent(retrieval)
-        registry.register_agent(summarize)
-        registry.register_agent(fallback)
-
-        logger.info("[OK] 已注册 %d 个 Agent", len(registry.get_all_agents()))
-
-        # knowledge_retrieval → RetrievalAgent（主），FallbackAgent（备）
-        registry.register_route(
-            "knowledge_retrieval",
-            ["retrieval_agent", "fallback_agent"],
-        )
-        # summarize → SummarizationAgent（主），FallbackAgent（备）
-        registry.register_route(
-            "summarize",
-            ["summarize_agent", "fallback_agent"],
-        )
-        # small_talk → RetrievalAgent 兜底处理简单闲聊，FallbackAgent 兜底
-        registry.register_route(
-            "small_talk",
-            ["retrieval_agent", "fallback_agent"],
-        )
-
-        logger.info("[OK] 路由表已注册")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("[SKIP] Agent/路由注册失败: %s", exc)
 
     # 启动异常检测后台任务
     try:
@@ -216,12 +187,23 @@ async def startup() -> None:
     logger.info("=" * 60)
 
 
-# 关闭事件
-
-@app.on_event("shutdown")
 async def shutdown() -> None:
     """应用关闭时清理资源。"""
     logger.info("Synapse 正在关闭...")
+
+    # 关闭能力（定时任务调度器等）
+    try:
+        from app.capabilities.manager import get_capability_manager
+        await get_capability_manager().shutdown_all()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("关闭能力失败: %s", exc)
+
+    # 关闭 MCP
+    try:
+        from app.plugins.mcp import get_mcp_manager
+        await get_mcp_manager().close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("关闭 MCP 失败: %s", exc)
 
     # 停止异常检测后台任务
     try:
@@ -253,4 +235,84 @@ async def shutdown() -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("关闭 ChromaDB 失败: %s", exc)
 
+    # 关闭数据库
+    try:
+        from app.core.db import close_db
+        await close_db()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("关闭数据库失败: %s", exc)
+
     logger.info("Synapse 已关闭")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    await startup()
+    try:
+        yield
+    finally:
+        await shutdown()
+
+
+# FastAPI 应用实例
+
+_app_settings = get_settings()
+
+app = FastAPI(
+    title="Synapse · 全能智能助手平台",
+    description="""
+## 👋 欢迎使用 Synapse
+
+一个带**意图识别**、**记忆管理**、**故障自愈**的多 Agent 智能助手（基于 LangChain）。
+
+### 能力
+
+- **知识问答（RAG）**：创建知识库、上传文档、带引用回答
+- **记忆检索**：短期对话 + 长期摘要 + 用户画像
+- **网页抓取 / 联网搜索**
+- **代码仓库助手**：GitHub / GitLab / 本地 Git
+- **定时任务**：按 cron 让助手执行任务，结果可推送到 Webhook
+- **插件**：本地 Python 插件 + MCP 服务
+
+### 怎么用
+
+1. 开启鉴权时先调 `POST /auth/login` 拿到 token（或用 API Key）
+2. 调 `POST /chat`（或流式 `POST /chat/stream`）发消息
+3. 拿到的 `session_id` 原样传回，就能多轮对话
+4. 随时调 `GET /health` 看各模块是否正常
+""",
+    version="2.0.0",
+    docs_url="/docs" if _app_settings.docs_enabled else None,
+    redoc_url="/redoc" if _app_settings.docs_enabled else None,
+    lifespan=lifespan,
+    swagger_ui_parameters={
+        "defaultModelsExpandDepth": -1,
+        "displayRequestDuration": True,
+        "filter": True,
+        "tryItOutEnabled": True,
+    },
+)
+
+# CORS 中间件：allow_origins=* 时浏览器禁止 credentials，故按配置动态决定
+_cors_origins = [o.strip() for o in _app_settings.cors_origins.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials="*" not in _cors_origins,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 注册路由（不设置顶层 tags，交给各自端点自行标记）
+app.include_router(chat_router, prefix="")
+app.include_router(system_router, prefix="")
+app.include_router(auth_router)
+app.include_router(users_router)
+app.include_router(knowledge_router)
+app.include_router(memory_router)
+app.include_router(repos_router)
+app.include_router(schedules_router)
+app.include_router(plugins_router)
+
+# 静态文件 — 聊天首页（必须最后挂载，避免覆盖 API 路由）
+app.mount("/", StaticFiles(directory="app/static", html=True), name="static")

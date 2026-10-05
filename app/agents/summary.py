@@ -3,21 +3,34 @@
 对长文本或对话历史进行智能摘要，提取关键信息、结论和动作项。
 适用于：用户明确要求总结、或记忆压缩器触发自动摘要。
 
+基于 LangChain ChatModel 实现（不使用工具），支持流式输出。
+
 适用意图：summarize
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, AsyncIterator, Dict, List, Sequence
 
-from app.agents.base import AgentContext, AgentResponse, BaseAgent
-from app.llm.gateway import LLMError, get_llm_client
+from langchain_core.messages import BaseMessage, HumanMessage
+
+from app.agents.base import AgentContext, AgentResponse
+from app.agents.langchain_agent import LangChainAgent, PreparedRun
 
 logger = logging.getLogger(__name__)
 
+_SYSTEM_PROMPT = (
+    "你是一个专业的摘要专家。请对提供的对话/文本生成结构化摘要，包含以下部分：\n"
+    "1. 【话题】讨论的主题\n"
+    "2. 【关键点】重要信息和结论\n"
+    "3. 【决策】已做出的决定\n"
+    "4. 【待办】后续需要跟进的事项\n"
+    "如某部分不适用，可标注「无」。摘要应简明扼要。"
+)
 
-class SummarizationAgent(BaseAgent):
+
+class SummarizationAgent(LangChainAgent):
     """摘要压缩 Agent。
 
     将对话历史或用户提供的长文本压缩为结构化摘要，
@@ -28,6 +41,15 @@ class SummarizationAgent(BaseAgent):
 
     agent_id: str = "summarize_agent"
     description: str = "智能对话与文本摘要 Agent"
+    tool_tags = ()
+    temperature = 0.3
+    max_tokens = 1024
+
+    def _empty_response(self) -> AgentResponse:
+        return AgentResponse(
+            reply="当前没有足够的内容可以总结，请先进行一些对话。",
+            metadata={"mode": "summarize", "content_length": 0},
+        )
 
     async def execute(self, context: AgentContext) -> AgentResponse:
         """执行摘要生成。
@@ -38,47 +60,43 @@ class SummarizationAgent(BaseAgent):
         Returns:
             包含结构化摘要的响应
         """
-        # 收集待摘要内容
-        content_to_summarize = self._gather_content(context)
+        if not self._gather_content(context):
+            return self._empty_response()
+        return await super().execute(context)
 
-        if not content_to_summarize:
-            return AgentResponse(
-                reply="当前没有足够的内容可以总结，请先进行一些对话。",
-                metadata={"mode": "summarize", "content_length": 0},
-            )
+    async def stream(self, context: AgentContext) -> AsyncIterator[Dict[str, Any]]:
+        if not self._gather_content(context):
+            response = self._empty_response()
+            yield {"type": "token", "content": response.reply}
+            yield {"type": "final", "response": response}
+            return
+        async for event in super().stream(context):
+            yield event
 
-        # 构建摘要 prompt
-        system_prompt = (
-            "你是一个专业的摘要专家。请对提供的对话/文本生成结构化摘要，包含以下部分：\n"
-            "1. 【话题】讨论的主题\n"
-            "2. 【关键点】重要信息和结论\n"
-            "3. 【决策】已做出的决定\n"
-            "4. 【待办】后续需要跟进的事项\n"
-            "如某部分不适用，可标注「无」。摘要应简明扼要。"
+    async def prepare(self, context: AgentContext) -> PreparedRun:
+        content = self._gather_content(context)
+        return PreparedRun(
+            system_prompt=_SYSTEM_PROMPT,
+            tools=[],
+            metadata={"mode": "summarize", "content_length": len(content)},
         )
 
+    def build_messages(self, context: AgentContext) -> List[BaseMessage]:
+        content_to_summarize = self._gather_content(context)
         user_prompt = f"请总结以下内容:\n\n{content_to_summarize}"
+        return [HumanMessage(content=user_prompt)]
 
-        # 调用 LLM
-        try:
-            llm = get_llm_client()
-            reply = await llm.chat(
-                messages=[{"role": "user", "content": user_prompt}],
-                system=system_prompt,
-                temperature=0.3,
-                max_tokens=1024,
-            )
-        except LLMError as exc:
-            logger.error("摘要 Agent: LLM 调用失败: %s", exc)
-            raise
-
-        metadata: Dict[str, Any] = {
-            "mode": "summarize",
-            "content_length": len(content_to_summarize),
-            "summary_length": len(reply),
-        }
-
-        return AgentResponse(reply=reply.strip(), metadata=metadata)
+    def build_metadata(
+        self,
+        context: AgentContext,
+        prepared: PreparedRun,
+        new_messages: Sequence[BaseMessage],
+    ) -> Dict[str, Any]:
+        metadata = super().build_metadata(context, prepared, new_messages)
+        metadata["mode"] = "summarize"
+        reply_len = sum(len(str(getattr(m, "content", ""))) for m in new_messages)
+        metadata["summary_length"] = reply_len
+        return metadata
 
     def _gather_content(self, context: AgentContext) -> str:
         """收集待摘要的内容。

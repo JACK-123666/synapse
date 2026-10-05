@@ -42,6 +42,10 @@ class IntentFusion:
         """初始化向量意图索引（需在 startup 时调用）。"""
         await self._vector.initialize()
 
+    async def refresh(self) -> None:
+        """意图目录变化后重建向量索引（插件启停 / 热重载时调用）。"""
+        await self._vector.refresh()
+
     async def recognize(self, message: str) -> Tuple[str, float]:
         """三路融合识别用户消息意图。
 

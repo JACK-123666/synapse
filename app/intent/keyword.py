@@ -12,6 +12,7 @@ import logging
 from typing import Dict, List, Optional
 
 from app.config import Settings, get_settings
+from app.intent.catalog import IntentCatalog, get_intent_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -19,17 +20,26 @@ logger = logging.getLogger(__name__)
 class KeywordIntentRecognizer:
     """基于关键词匹配的意图识别器。
 
-    使用配置中的 intent_keywords 字典，对用户消息分词匹配。
+    使用意图目录中的关键词（默认为配置中的 intent_keywords），对用户消息分词匹配。
     为每个意图计算匹配关键词的加权得分（匹配数量 / 该意图总关键词数），
     最后归一化得到各意图的置信度分布。
     """
 
-    def __init__(self, settings: Optional[Settings] = None) -> None:
+    def __init__(
+        self,
+        settings: Optional[Settings] = None,
+        catalog: Optional[IntentCatalog] = None,
+    ) -> None:
         self._settings: Settings = settings or get_settings()
-        # 预计算各意图的关键词总数，避免每次计算
-        self._keyword_counts: Dict[str, int] = {
+        # 意图关键词从动态意图目录读取（默认值即 config.intent_keywords）
+        self._catalog: IntentCatalog = catalog or get_intent_catalog()
+
+    @property
+    def _keyword_counts(self) -> Dict[str, int]:
+        """各意图的关键词总数（随意图目录动态变化）。"""
+        return {
             intent: len(keywords)
-            for intent, keywords in self._settings.intent_keywords.items()
+            for intent, keywords in self._catalog.keywords().items()
         }
 
     async def recognize(self, message: str) -> Optional[Dict[str, float]]:
@@ -52,7 +62,7 @@ class KeywordIntentRecognizer:
 
         # 各意图的关键词命中数
         hit_counts: Dict[str, int] = {}
-        for intent, keywords in self._settings.intent_keywords.items():
+        for intent, keywords in self._catalog.keywords().items():
             hits = 0
             for kw in keywords:
                 if kw.lower() in lower_msg:

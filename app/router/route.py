@@ -11,7 +11,7 @@ import asyncio
 import logging
 import random
 import time
-from typing import List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from app.agents.base import AgentContext, AgentResponse
 from app.config import Settings, get_settings
@@ -75,10 +75,7 @@ class TaskDispatcher:
             context.session_id, intent, candidates,
         )
 
-        # 按权重排序（兜底 Agent 永远最后，不参与排序）
-        main_candidates = [c for c in candidates if c != fallback_id]
-        sorted_candidates = self._sort_by_weight(main_candidates)
-        sorted_candidates.append(fallback_id)
+        sorted_candidates = self._ordered_candidates(candidates)
 
         last_error: Optional[Exception] = None
         used_agent_id: Optional[str] = None
@@ -104,8 +101,7 @@ class TaskDispatcher:
                     "分发: Agent '%s' 执行失败 (session=%s)，降级: %s",
                     agent_id, context.session_id, exc,
                 )
-                # 记录失败指标
-                metrics.record_request(agent_id, "error", 0.0)
+                # 失败指标已在 _execute_agent 中记录（含真实耗时），这里不再重复计数
                 continue
 
         # 绝对不应该走到这里（fallback_agent 绝不抛异常）        #    但为极端安全，返回硬编码兜底回复
@@ -165,6 +161,85 @@ class TaskDispatcher:
         metrics.record_request(agent_id, "success", elapsed)
 
         return result
+
+    def _candidates_for(self, intent: str, session_id: str) -> List[str]:
+        """获取意图的候选 Agent 列表（只含健康的，兜底 Agent 保证在末尾）。"""
+        candidates = self._registry.get_healthy_agents_for_intent(intent)
+        if not candidates and intent != "small_talk":
+            logger.warning(
+                "分发: 意图 '%s' 无可用 Agent，回退到 small_talk", intent
+            )
+            candidates = self._registry.get_healthy_agents_for_intent("small_talk")
+        fallback_id = "fallback_agent"
+        candidates = [c for c in candidates if c != fallback_id]
+        candidates.append(fallback_id)
+        logger.info(
+            "分发: session=%s 意图=%s 候选=%s", session_id, intent, candidates,
+        )
+        return candidates
+
+    def _ordered_candidates(self, candidates: List[str]) -> List[str]:
+        """按权重排序（兜底 Agent 永远最后，不参与排序）。"""
+        fallback_id = "fallback_agent"
+        main_candidates = [c for c in candidates if c != fallback_id]
+        sorted_candidates = self._sort_by_weight(main_candidates)
+        sorted_candidates.append(fallback_id)
+        return sorted_candidates
+
+    async def dispatch_stream(
+        self, context: AgentContext
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """流式分发。
+
+        与 dispatch 使用相同的候选与降级规则：在某个 Agent 输出第一个 token 之前失败，
+        自动降级到下一个候选；已经开始输出后失败，则输出 error 事件并结束。
+
+        Yields:
+            Agent 的流式事件；最后一个事件为 {"type": "final", "response": ..., "agent_id": ...}
+        """
+        candidates = self._ordered_candidates(
+            self._candidates_for(context.intent, context.session_id)
+        )
+
+        # 流式输出不套整体超时（跨 yield 的超时会误伤调用方），依赖 LLM 自身的请求超时
+        for agent_id in candidates:
+            agent = self._registry.get_agent(agent_id)
+            if agent is None:
+                continue
+            started = False
+            t0 = time.monotonic()
+            try:
+                async for event in agent.stream(context):
+                    if event.get("type") == "final":
+                        response: AgentResponse = event["response"]
+                        response.metadata["agent_id"] = agent_id
+                        elapsed = time.monotonic() - t0
+                        self._detector.record_latency(agent_id, elapsed)
+                        metrics.record_request(agent_id, "success", elapsed)
+                        yield {**event, "agent_id": agent_id}
+                        return
+                    started = True
+                    yield event
+            except Exception as exc:  # noqa: BLE001
+                elapsed = time.monotonic() - t0
+                self._detector.record_latency(agent_id, elapsed)
+                metrics.record_request(agent_id, "error", elapsed)
+                logger.warning(
+                    "流式分发: Agent '%s' 执行失败 (session=%s, 已输出=%s): %s",
+                    agent_id, context.session_id, started, exc,
+                )
+                if started:
+                    yield {"type": "error", "message": f"生成中断: {exc}", "agent_id": agent_id}
+                    return
+                continue
+
+        logger.critical("流式分发: 所有 Agent 均失败 (session=%s)", context.session_id)
+        response = AgentResponse(
+            reply="系统暂时无法处理您的请求，请稍后重试。",
+            metadata={"mode": "hard_fallback", "agent_id": "hard_fallback"},
+        )
+        yield {"type": "token", "content": response.reply}
+        yield {"type": "final", "response": response, "agent_id": "hard_fallback"}
 
     def _sort_by_weight(self, candidates: List[str]) -> List[str]:
         """按权重对候选 Agent 排序（权重高的优先）。

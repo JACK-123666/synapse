@@ -89,13 +89,25 @@ class LongTermMemory:
 
         collection = self._get_collection()
         # ChromaDB 同步操作，用 to_thread 包装
-        await asyncio.to_thread(
-            collection.add,
-            ids=[record_id],
-            embeddings=[embedding],
-            documents=[summary],
-            metadatas=[metadata],
-        )
+        try:
+            await asyncio.to_thread(
+                collection.add,
+                ids=[record_id],
+                embeddings=[embedding],
+                documents=[summary],
+                metadatas=[metadata],
+            )
+        except Exception:  # noqa: BLE001
+            # 缓存的集合可能已失效（ChromaDB 重启 / 数据重置），重新获取后重试一次
+            self._collection = None
+            collection = self._get_collection()
+            await asyncio.to_thread(
+                collection.add,
+                ids=[record_id],
+                embeddings=[embedding],
+                documents=[summary],
+                metadatas=[metadata],
+            )
         logger.info(
             "长期记忆: session=%s 摘要已存储 (id=%s, 长度=%d)",
             session_id, record_id, len(summary),
@@ -146,9 +158,46 @@ class LongTermMemory:
             )
         except Exception as exc:  # noqa: BLE001
             logger.error("长期记忆: ChromaDB 检索失败: %s", exc)
+            # 缓存的集合可能已失效，下次调用时重新获取
+            self._collection = None
             return []
 
         return self._parse_results(results)
+
+    async def list_summaries(
+        self,
+        user_id: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """按时间倒序列出摘要（可按 user_id 过滤）。"""
+        collection = await asyncio.to_thread(self._get_collection)
+        where = {"user_id": user_id} if user_id else None
+        results = await asyncio.to_thread(
+            collection.get, where=where, include=["documents", "metadatas"]
+        )
+        items: List[Dict[str, Any]] = []
+        for rid, doc, meta in zip(
+            results.get("ids") or [],
+            results.get("documents") or [],
+            results.get("metadatas") or [],
+        ):
+            items.append({"id": rid, "text": doc, "metadata": meta or {}})
+        items.sort(key=lambda x: x["metadata"].get("timestamp", 0), reverse=True)
+        return items[offset:offset + limit]
+
+    async def delete_summary(self, record_id: str, user_id: Optional[str] = None) -> bool:
+        """删除一条摘要；指定 user_id 时只允许删除该用户自己的记录。"""
+        collection = await asyncio.to_thread(self._get_collection)
+        found = await asyncio.to_thread(collection.get, ids=[record_id], include=["metadatas"])
+        if not found.get("ids"):
+            return False
+        meta = (found.get("metadatas") or [{}])[0] or {}
+        if user_id and meta.get("user_id") != user_id:
+            return False
+        await asyncio.to_thread(collection.delete, ids=[record_id])
+        logger.info("长期记忆: 已删除摘要 %s", record_id)
+        return True
 
     @staticmethod
     def _parse_results(results: Dict[str, Any]) -> List[Dict[str, Any]]:

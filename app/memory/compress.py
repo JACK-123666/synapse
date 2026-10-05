@@ -30,7 +30,7 @@ class MemoryCompressor:
     2. 若达到阈值，取出全部短期记忆消息，拼接为对话文本。
     3. 调用 LLM 生成摘要。
     4. 将摘要存入长期记忆（ChromaDB session_summaries 集合）。
-    5. 清空短期记忆。
+    5. 移除短期记忆中已被压缩的消息（压缩期间新追加的保留）。
 
     压缩是幂等的：即使 LLM 调用失败，也只会记录错误，不会清空短期记忆，
     下次请求会再次尝试压缩。
@@ -112,15 +112,15 @@ class MemoryCompressor:
             logger.error("压缩: session=%s 长期记忆存储失败: %s", session_id, exc)
             return None
 
-        # 清空短期记忆
-        await self._short_term.clear(session_id)
+        # 清理短期记忆：只移除已压缩进摘要的消息（压缩期间新追加的对话保留）
+        await self._short_term.trim_head(session_id, len(messages))
 
         # 记录指标
         metrics.record_compression()
 
         logger.info(
-            "压缩完成: session=%s 摘要长度=%d，短期记忆已清空",
-            session_id, len(summary),
+            "压缩完成: session=%s 摘要长度=%d，已压缩的 %d 条短期记忆已清理",
+            session_id, len(summary), len(messages),
         )
         return summary
 

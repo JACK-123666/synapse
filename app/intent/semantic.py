@@ -11,12 +11,16 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from app.config import Settings, get_settings
+from app.intent.catalog import IntentCatalog, get_intent_catalog
 from app.llm.gateway import LLMError, get_llm_client
 
 logger = logging.getLogger(__name__)
+
+#: config 中的默认意图；意图目录只含这三个时使用原有固定 prompt
+_DEFAULT_INTENTS = ("knowledge_retrieval", "summarize", "small_talk")
 
 
 class LLMIntentRecognizer:
@@ -26,8 +30,14 @@ class LLMIntentRecognizer:
     并以 JSON 格式返回意图标签与置信度。
     """
 
-    def __init__(self, settings: Optional[Settings] = None) -> None:
+    def __init__(
+        self,
+        settings: Optional[Settings] = None,
+        catalog: Optional[IntentCatalog] = None,
+    ) -> None:
         self._settings: Settings = settings or get_settings()
+        # 意图列表与描述从动态意图目录读取（默认值即 config 中的配置）
+        self._catalog: IntentCatalog = catalog or get_intent_catalog()
 
     async def recognize(self, message: str) -> Optional[Dict[str, float]]:
         """识别用户消息的意图。
@@ -61,13 +71,17 @@ class LLMIntentRecognizer:
 
     def _build_system_prompt(self) -> str:
         """构建 few-shot 意图识别的系统提示词。"""
-        intents = self._settings.known_intents
-        descriptions = self._settings.intent_descriptions
+        intents = self._catalog.names()
+        descriptions = self._catalog.descriptions()
 
         intent_lines = "\n".join(
             f"- {intent}: {descriptions.get(intent, '其他')}"
             for intent in intents
         )
+
+        # 意图目录在默认三个意图之外有扩展时，few-shot 示例按目录动态生成
+        if set(intents) != set(_DEFAULT_INTENTS):
+            return self._build_dynamic_prompt(intents, intent_lines)
 
         return (
             f"你是一个意图识别分类器。将用户的输入分类到以下意图之一：\n"
@@ -86,6 +100,39 @@ class LLMIntentRecognizer:
             f"示例 3：\n"
             f'用户: "帮我总结一下"\n'
             f'{{"knowledge_retrieval": 0.10, "summarize": 0.85, "small_talk": 0.05}}'
+        )
+
+    def _build_dynamic_prompt(self, intents: List[str], intent_lines: str) -> str:
+        """按意图目录动态生成 few-shot prompt（每个意图取一条示例）。"""
+        fixed_examples = {
+            "small_talk": "你好",
+            "knowledge_retrieval": "什么是向量数据库？",
+            "summarize": "帮我总结一下",
+        }
+        catalog_examples = self._catalog.examples()
+
+        def scores_for(target: str) -> str:
+            rest = [i for i in intents if i != target]
+            other = round(0.15 / len(rest), 2) if rest else 0.0
+            scores = {i: (0.85 if i == target else other) for i in intents}
+            return json.dumps(scores, ensure_ascii=False)
+
+        lines: List[str] = []
+        for idx, intent in enumerate(intents, 1):
+            example = fixed_examples.get(intent) or next(
+                iter(catalog_examples.get(intent) or []), None
+            )
+            if not example:
+                continue
+            lines.append(f'示例 {idx}：\n用户: "{example}"\n{scores_for(intent)}')
+
+        return (
+            f"你是一个意图识别分类器。将用户的输入分类到以下意图之一：\n"
+            f"{intent_lines}\n\n"
+            f"要求：\n"
+            f"1. 以 JSON 格式输出，包含每个意图的置信度（0.0~1.0），置信度之和应为 1.0\n"
+            f"2. 仅输出 JSON，不要添加任何额外文字\n\n"
+            + "\n\n".join(lines)
         )
 
     def _parse_response(
@@ -109,7 +156,7 @@ class LLMIntentRecognizer:
             result = json.loads(raw)
             # 过滤掉非预定义意图的键
             valid: Dict[str, float] = {}
-            for intent in self._settings.known_intents:
+            for intent in self._catalog.names():
                 if intent in result:
                     confidence = float(result[intent])
                     valid[intent] = max(0.0, min(1.0, confidence))

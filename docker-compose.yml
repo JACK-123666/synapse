@@ -25,6 +25,15 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CHROMA_HOST=chromadb
       - CHROMA_PORT=8000
+      # 数据与插件目录（与下方挂载卷对应）
+      - DATA_DIR=/app/data
+      - PLUGINS_DIR=/app/plugins
+      - ANONYMIZED_TELEMETRY=False
+    volumes:
+      # SQLite 数据库、上传文件、仓库 clone、应用密钥（.secret_key）
+      - ./data:/app/data
+      # 本地插件：放入插件目录后调用 POST /plugins/reload 即可加载，无需重建镜像
+      - ./plugins:/app/plugins
     depends_on:
       redis:
         condition: service_healthy
@@ -89,6 +98,31 @@ services:
       - synapse-network
 
   # ----------------------------------------------------------
+  # PostgreSQL - 企业部署可选（默认使用 data/ 下的 SQLite）
+  # 启用: docker compose --profile postgres up -d
+  # 并在 .env 设置:
+  #   DATABASE_URL=postgresql+asyncpg://synapse:synapse@postgres:5432/synapse
+  # ----------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: synapse-postgres
+    profiles: ["postgres"]
+    environment:
+      - POSTGRES_USER=synapse
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-synapse}
+      - POSTGRES_DB=synapse
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synapse -d synapse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - synapse-network
+
+  # ----------------------------------------------------------
   # Prometheus - 监控指标采集
   # ----------------------------------------------------------
   prometheus:
@@ -116,6 +150,8 @@ volumes:
   chroma-data:
     driver: local
   prometheus-data:
+    driver: local
+  postgres-data:
     driver: local
 
 # ============================================================

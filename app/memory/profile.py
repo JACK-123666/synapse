@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
+
+from redis.exceptions import WatchError
 
 from app.config import Settings, get_settings
 from app.store import get_redis
@@ -22,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 #: Redis key 前缀
 _PROFILE_PREFIX = "synapse:user_profile"
+#: 画像并发更新冲突时的最大重试次数
+_MAX_UPDATE_RETRIES = 5
 
 
 class UserProfileManager:
@@ -89,17 +93,60 @@ class UserProfileManager:
         key = self._key(user_id)
         await redis.set(key, json.dumps(profile, ensure_ascii=False))
 
+    @staticmethod
+    def _empty_profile() -> Dict[str, Any]:
+        return {
+            "preferences": [],
+            "frequent_terms": [],
+            "interaction_count": 0,
+            "custom": {},
+        }
+
+    async def _atomic_update(
+        self, user_id: str, mutate: Callable[[Dict[str, Any]], None]
+    ) -> Dict[str, Any]:
+        """原子地读-改-写用户画像（Redis WATCH 乐观锁，冲突时重试）。
+
+        同一用户的并发请求不会互相覆盖更新。
+        """
+        redis = await get_redis()
+        key = self._key(user_id)
+        for _ in range(_MAX_UPDATE_RETRIES):
+            try:
+                async with redis.pipeline(transaction=True) as pipe:
+                    await pipe.watch(key)
+                    raw = await pipe.get(key)
+                    try:
+                        profile = json.loads(raw) if raw else self._empty_profile()
+                    except json.JSONDecodeError:
+                        profile = self._empty_profile()
+                    mutate(profile)
+                    pipe.multi()
+                    pipe.set(key, json.dumps(profile, ensure_ascii=False))
+                    await pipe.execute()
+                    return profile
+            except WatchError:
+                continue
+            except (AttributeError, NotImplementedError):
+                # 不支持事务的 Redis 替身：退化为普通读-改-写
+                break
+        profile = await self.get_profile(user_id)
+        mutate(profile)
+        await self.save_profile(user_id, profile)
+        return profile
+
     async def update_preferences(
         self, user_id: Optional[str], preferences: List[str]
     ) -> None:
         """更新用户偏好标签（去重合并）。"""
         if not user_id:
             return
-        profile = await self.get_profile(user_id)
-        existing = set(profile.get("preferences", []))
-        existing.update(preferences)
-        profile["preferences"] = list(existing)
-        await self.save_profile(user_id, profile)
+
+        def _mutate(profile: Dict[str, Any]) -> None:
+            existing = list(profile.get("preferences", []))
+            profile["preferences"] = list(dict.fromkeys(existing + list(preferences)))
+
+        await self._atomic_update(user_id, _mutate)
 
     async def add_frequent_terms(
         self, user_id: Optional[str], terms: List[str]
@@ -107,20 +154,23 @@ class UserProfileManager:
         """添加常用术语（去重合并）。"""
         if not user_id:
             return
-        profile = await self.get_profile(user_id)
-        existing = set(profile.get("frequent_terms", []))
-        existing.update(terms)
-        # 最多保留 50 个常用术语
-        profile["frequent_terms"] = list(existing)[:50]
-        await self.save_profile(user_id, profile)
+
+        def _mutate(profile: Dict[str, Any]) -> None:
+            existing = [t for t in profile.get("frequent_terms", []) if t not in terms]
+            # 最多保留 50 个常用术语（保留最近出现的）
+            profile["frequent_terms"] = list(dict.fromkeys(existing + list(terms)))[-50:]
+
+        await self._atomic_update(user_id, _mutate)
 
     async def increment_interaction(self, user_id: Optional[str]) -> None:
         """递增用户交互次数。"""
         if not user_id:
             return
-        profile = await self.get_profile(user_id)
-        profile["interaction_count"] = profile.get("interaction_count", 0) + 1
-        await self.save_profile(user_id, profile)
+
+        def _mutate(profile: Dict[str, Any]) -> None:
+            profile["interaction_count"] = profile.get("interaction_count", 0) + 1
+
+        await self._atomic_update(user_id, _mutate)
 
     async def build_prompt_context(
         self, user_id: Optional[str]

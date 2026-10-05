@@ -13,6 +13,7 @@ import logging
 from typing import Dict, List, Optional
 
 from app.config import Settings, get_settings
+from app.intent.catalog import IntentCatalog, get_intent_catalog
 from app.store import get_chroma
 
 logger = logging.getLogger(__name__)
@@ -26,9 +27,20 @@ class VectorIntentRecognizer:
     之后的识别只需查询相似度即可。
     """
 
-    def __init__(self, settings: Optional[Settings] = None) -> None:
+    def __init__(
+        self,
+        settings: Optional[Settings] = None,
+        catalog: Optional[IntentCatalog] = None,
+    ) -> None:
         self._settings: Settings = settings or get_settings()
+        # 意图示例从动态意图目录读取（默认值即 config.intent_examples）
+        self._catalog: IntentCatalog = catalog or get_intent_catalog()
         self._initialized: bool = False
+
+    async def refresh(self) -> None:
+        """意图目录变化后重建索引（插件启停、热重载时调用）。"""
+        self._initialized = False
+        await self.initialize()
 
     async def initialize(self) -> None:
         """初始化意图向量索引。
@@ -49,32 +61,40 @@ class VectorIntentRecognizer:
     def _init_sync(self) -> None:
         """同步执行 ChromaDB 初始化（在 asyncio.to_thread 中调用）。"""
         client = get_chroma()
+        version = self._catalog.version()
         try:
             collection = client.get_collection(
                 name=self._settings.chroma_collection_intents
             )
-            # 集合已存在且非空，跳过
+            # 集合已存在、非空且示例版本一致，跳过
             count = collection.count()
-            if count > 0:
+            stored_version = (collection.metadata or {}).get("catalog_version")
+            if count > 0 and stored_version == version:
                 logger.info(
                     "向量意图识别器: 集合 '%s' 已有 %d 条记录，跳过初始化",
                     self._settings.chroma_collection_intents, count,
                 )
                 return
+            # 意图示例有变化（或旧版本集合没有版本号），删除后重建
+            logger.info(
+                "向量意图识别器: 意图示例已变化 (%s -> %s)，重建索引",
+                stored_version, version,
+            )
+            client.delete_collection(name=self._settings.chroma_collection_intents)
         except Exception:
             # 集合不存在，创建
             pass
 
         collection = client.get_or_create_collection(
             name=self._settings.chroma_collection_intents,
-            metadata={"hnsw:space": "cosine"},
+            metadata={"hnsw:space": "cosine", "catalog_version": version},
         )
 
         # 收集所有意图示例
         ids: List[str] = []
         documents: List[str] = []
         metadatas: List[Dict[str, str]] = []
-        for intent, examples in self._settings.intent_examples.items():
+        for intent, examples in self._catalog.examples().items():
             for i, example in enumerate(examples):
                 ids.append(f"{intent}_{i}")
                 documents.append(example)

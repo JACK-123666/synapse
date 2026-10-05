@@ -1,0 +1,6 @@
+name: example_plugin
+version: 1.0.0
+description: 示例插件：查询当前时间、安全计算数学表达式
+author: Synapse
+entry: __init__:ExamplePlugin
+permissions: [read]

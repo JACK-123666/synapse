@@ -10,16 +10,22 @@
 
 所有调用基于 httpx.AsyncClient，完全异步，支持超时控制。
 当 LLM 不可用时抛出 LLMError，由上层捕获并触发降级兜底。
+
+LLM_BACKEND=langchain（默认）时，chat / embed / embed_batch 委托给
+app.llm.factory 创建的 LangChain ChatModel / Embeddings；
+LLM_BACKEND=httpx 时使用下方保留的原自研 HTTP 实现。
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
+import json
 import httpx
 
 from app.config import Settings, get_settings
+from app.core.context import get_request_context
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +104,7 @@ class LLMClient:
             "api_key_prefix": self._rc("llm_api_key", "")[:8] + "..." if self._rc("llm_api_key") else "(empty)",
             "timeout_s": self._rc("llm_timeout", 60),
             "embedding_api_key_set": bool(self._rc("embedding_api_key")),
+            "backend": self._rc("llm_backend", "langchain"),
         }
         if provider == "deepseek":
             base["model"] = self._rc("deepseek_model")
@@ -166,7 +173,11 @@ class LLMClient:
         Raises:
             LLMError: 调用失败时抛出，上层捕获后触发降级
         """
+        if self._use_langchain():
+            return await self._chat_langchain(messages, temperature, max_tokens, system)
+
         provider = self._rc("llm_provider", "openai").lower()
+        override = get_request_context().model_override
         try:
             if provider == "claude":
                 return await self._chat_claude(
@@ -176,17 +187,41 @@ class LLMClient:
                 return await self._chat_openai(
                     messages, temperature, max_tokens, system,
                     base_url=self._rc("deepseek_base_url"),
-                    model=self._rc("deepseek_model"),
+                    model=override or self._rc("deepseek_model"),
                 )
             else:
                 return await self._chat_openai(
-                    messages, temperature, max_tokens, system
+                    messages, temperature, max_tokens, system,
+                    model=override,
                 )
         except httpx.HTTPError as exc:
             logger.error("LLM 对话请求网络错误: %s", exc)
             raise LLMError(f"LLM 网络错误: {exc}") from exc
         except Exception as exc:
             logger.error("LLM 对话请求失败: %s", exc)
+            raise LLMError(f"LLM 调用失败: {exc}") from exc
+
+    def _use_langchain(self) -> bool:
+        """是否使用 LangChain 后端（LLM_BACKEND=langchain，默认）。"""
+        return str(self._rc("llm_backend", "langchain") or "langchain").lower() == "langchain"
+
+    async def _chat_langchain(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+        system: Optional[str],
+    ) -> str:
+        """通过 LangChain ChatModel 完成对话（自动应用请求级模型覆盖）。"""
+        from app.llm.factory import get_chat_model
+        from app.llm.messages import message_text, to_langchain_messages
+
+        try:
+            model = get_chat_model(temperature=temperature, max_tokens=max_tokens)
+            result = await model.ainvoke(to_langchain_messages(messages, system))
+            return message_text(result)
+        except Exception as exc:
+            logger.error("LLM 对话请求失败(langchain): %s", exc)
             raise LLMError(f"LLM 调用失败: {exc}") from exc
 
     async def _chat_openai(
@@ -255,6 +290,15 @@ class LLMClient:
         当 provider 为 deepseek/claude 且未配置 EMBEDDING_API_KEY 时，
         会在日志警告后尝试回退（可能 401），建议配置独立的 embedding 服务。
         """
+        if self._use_langchain():
+            from app.llm.factory import get_embeddings
+
+            try:
+                return await get_embeddings().aembed_query(text)
+            except Exception as exc:
+                logger.error("Embedding 请求失败(langchain): %s", exc)
+                raise LLMError(f"Embedding 失败: {exc}") from exc
+
         try:
             provider = self._rc("llm_provider", "openai").lower()
             embed_key = self._rc("embedding_api_key", "")
@@ -289,6 +333,17 @@ class LLMClient:
         Returns:
             embedding 向量列表，与输入顺序一致
         """
+        if self._use_langchain():
+            from app.llm.factory import get_embeddings
+
+            if not texts:
+                return []
+            try:
+                return await get_embeddings().aembed_documents(list(texts))
+            except Exception as exc:
+                logger.error("批量 Embedding 请求失败(langchain): %s", exc)
+                raise LLMError(f"批量 Embedding 失败: {exc}") from exc
+
         try:
             payload = {
                 "model": self._rc("embedding_model"),
@@ -339,6 +394,200 @@ class LLMClient:
             "x-api-key": self._rc("llm_api_key", ""),
             "anthropic-version": "2023-06-01",
         }
+
+    # ---- Function Calling 支持 ----
+
+    async def chat_with_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        system: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[str]]] = None,
+        temperature: float = 0.5,
+        max_tokens: int = 2048,
+        max_tool_rounds: int = 4,
+    ) -> str:
+        """带 Function Calling 的对话补全。
+
+        循环：把 tools 交给模型 -> 若返回 tool_calls 则逐个执行并回填 ->
+        再让模型生成最终文本；直到没有 tool_calls 或达到 max_tool_rounds。
+        """
+        provider = self._rc("llm_provider", "openai").lower()
+        if not tools:
+            return await self.chat(
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                system=system,
+            )
+        if tool_executor is None:
+            raise ValueError("启用 function calling 时必须提供 tool_executor")
+
+        msgs: List[Dict[str, Any]] = [dict(m) for m in messages]
+        last_text: str = ""
+
+        for _ in range(max_tool_rounds):
+            if provider == "claude":
+                data = await self._completion_claude(
+                    msgs, system, temperature, max_tokens, tools
+                )
+                content, tool_calls = _extract_claude(data)
+            else:
+                data = await self._completion_openai(
+                    msgs, system, temperature, max_tokens, tools
+                )
+                content, tool_calls = _extract_openai(data)
+
+            if content:
+                last_text = content
+
+            if not tool_calls:
+                return content if content else last_text
+
+            executed: List[tuple] = []
+            for tc in tool_calls:
+                try:
+                    result = await tool_executor(tc["name"], tc["arguments"])
+                except Exception as exc:  # noqa: BLE001
+                    result = f"工具执行失败: {exc}"
+                executed.append((tc["id"], result))
+
+            if provider == "claude":
+                msgs.append(_claude_assistant_tool_calls(content, tool_calls))
+                blocks = [
+                    {"type": "tool_result", "tool_use_id": tid, "content": res}
+                    for tid, res in executed
+                ]
+                msgs.append({"role": "user", "content": blocks})
+            else:
+                msgs.append(_openai_assistant_tool_calls(content, tool_calls))
+                for tid, res in executed:
+                    msgs.append({"role": "tool", "tool_call_id": tid, "content": res})
+
+        return last_text
+
+    async def _completion_openai(
+        self,
+        messages: List[Dict[str, Any]],
+        system: Optional[str],
+        temperature: float,
+        max_tokens: int,
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        provider = self._rc("llm_provider", "openai").lower()
+        model = self._rc("deepseek_model") if provider == "deepseek" else self._rc("llm_model")
+        base_url = self._rc("deepseek_base_url") if provider == "deepseek" else self._rc("llm_base_url")
+
+        full_messages: List[Dict[str, Any]] = []
+        if system:
+            full_messages.append({"role": "system", "content": system})
+        full_messages.extend(messages)
+
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": full_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if tools:
+            payload["tools"] = tools
+
+        url = f"{base_url.rstrip('/')}/chat/completions"
+        resp = await self.http.post(url, json=payload, headers=self._openai_headers())
+        resp.raise_for_status()
+        return resp.json()
+
+    async def _completion_claude(
+        self,
+        messages: List[Dict[str, Any]],
+        system: Optional[str],
+        temperature: float,
+        max_tokens: int,
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "model": self._rc("claude_model"),
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if system:
+            payload["system"] = system
+        if tools:
+            payload["tools"] = [_to_claude_tool(t) for t in tools]
+
+        url = f"{self._rc('anthropic_base_url').rstrip('/')}/messages"
+        resp = await self.http.post(url, json=payload, headers=self._claude_headers())
+        resp.raise_for_status()
+        return resp.json()
+
+
+# ---- Function Calling 的工具函数（OpenAI 兼容 + Claude 翻译）----
+
+
+def _extract_openai(data: Dict[str, Any]):
+    message = data["choices"][0]["message"]
+    content = message.get("content")
+    tool_calls = []
+    for tc in message.get("tool_calls") or []:
+        fn = tc.get("function", {})
+        raw = fn.get("arguments") or "{}"
+        try:
+            args = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:  # noqa: BLE001
+            args = {}
+        tool_calls.append({"id": tc.get("id"), "name": fn.get("name"), "arguments": args})
+    return content, tool_calls or None
+
+
+def _extract_claude(data: Dict[str, Any]):
+    blocks = data.get("content", [])
+    texts = [b.get("text", "") for b in blocks if b.get("type") == "text"]
+    content = "".join(texts) or None
+    tool_calls = []
+    for b in blocks:
+        if b.get("type") == "tool_use":
+            tool_calls.append(
+                {"id": b.get("id"), "name": b.get("name"), "arguments": b.get("input") or {}}
+            )
+    return content, tool_calls or None
+
+
+def _to_claude_tool(t: Dict[str, Any]) -> Dict[str, Any]:
+    fn = t.get("function", t)
+    return {
+        "name": fn["name"],
+        "description": fn.get("description", ""),
+        "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
+    }
+
+
+def _openai_assistant_tool_calls(content: Optional[str], tool_calls) -> Dict[str, Any]:
+    tcs = [
+        {
+            "id": tc["id"],
+            "type": "function",
+            "function": {
+                "name": tc["name"],
+                "arguments": json.dumps(tc["arguments"], ensure_ascii=False),
+            },
+        }
+        for tc in tool_calls
+    ]
+    return {"role": "assistant", "content": content, "tool_calls": tcs}
+
+
+def _claude_assistant_tool_calls(content: Optional[str], tool_calls) -> Dict[str, Any]:
+    blocks: List[Dict[str, Any]] = []
+    if content:
+        blocks.append({"type": "text", "text": content})
+    for tc in tool_calls:
+        blocks.append({"type": "tool_use", "id": tc["id"], "name": tc["name"], "input": tc["arguments"]})
+    return {"role": "assistant", "content": blocks}
+
+
+
 
 
 # 全局单例

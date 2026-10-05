@@ -3,50 +3,52 @@
 从 ChromaDB 知识库中语义检索相关文档片段，
 结合短期/长期记忆和用户画像，调用 LLM 生成知识驱动的回复。
 
-适用意图：knowledge_retrieval
+基于 LangChain create_agent 实现：knowledge_retrieval 且允许联网时，
+把 web_search / fetch_url 作为工具交给模型，由模型自主决定是否调用。
+
+适用意图：knowledge_retrieval（兼处理 small_talk、summarize 兜底）
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Sequence
 
-from app.agents.base import AgentContext, AgentResponse, BaseAgent
-from app.llm.gateway import LLMError, get_llm_client
+from langchain_core.messages import BaseMessage
+
+from app.agents.base import AgentContext
+from app.agents.langchain_agent import LangChainAgent, PreparedRun
 from app.memory.archive import get_long_term_memory
-from app.tools.search import web_search
 
 logger = logging.getLogger(__name__)
 
 
-class RetrievalAgent(BaseAgent):
+class RetrievalAgent(LangChainAgent):
     """知识检索 Agent。
 
     工作流程：
-    1. 从 ChromaDB 知识库检索与用户消息语义相似的知识文档。
+    1. 从 ChromaDB 知识库（全局知识库 + 当前用户可访问的 RAG 知识库）检索与用户消息语义相似的文档。
     2. 构建增强 prompt：知识上下文 + 长期记忆召回 + 短期对话 + 用户画像。
-    3. 调用 LLM 生成基于检索增强的回复。
+    3. 调用 LLM 生成基于检索增强的回复（可按需调用联网工具）。
     """
 
     agent_id: str = "retrieval_agent"
     description: str = "基于向量检索的知识问答 Agent"
+    tool_tags = ("web",)
+    temperature = 0.5
+    max_tokens = 2048
 
-    async def execute(self, context: AgentContext) -> AgentResponse:
-        """执行知识检索 / 闲聊回复。
+    async def prepare(self, context: AgentContext) -> PreparedRun:
+        """执行知识检索 / 闲聊回复前的准备。
 
         small_talk：直接以自然友好的方式聊天，不走知识检索。
         knowledge_retrieval：从知识库检索 + long‑term 召回，LLM 综合回答。
         summarize：委托上下文中的记忆做摘要（实际由 SummarizationAgent 处理，
         此处兜底处理未路由到 summarize 的情况）。
-
-        Args:
-            context: 执行上下文
-
-        Returns:
-            知识驱动 / 闲聊回复
         """
         intent = context.intent
         long_term = get_long_term_memory()
+        web_text: str = ""
 
         # ---- knowledge_retrieval / summarize：检索知识 ----
         knowledge_text: str = ""
@@ -57,34 +59,28 @@ class RetrievalAgent(BaseAgent):
                     query_text=context.message,
                     top_k=5,
                 )
-                if knowledge_results:
-                    snippets = [r["text"] for r in knowledge_results if r.get("text")]
-                    knowledge_text = "\n---\n".join(snippets)
-                    logger.info(
-                        "检索 Agent: session=%s 检索到 %d 条知识",
-                        context.session_id, len(knowledge_results),
-                    )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("检索 Agent: 知识库检索异常: %s", exc)
 
-            # ---- 知识库不足时，联网搜索（受 context.web_search 控制） ----
-            web_results: List[Dict[str, str]] = []
-            web_text: str = ""
-            if not knowledge_results and intent == "knowledge_retrieval" and context.web_search:
-                try:
-                    web_results = await web_search(context.message, max_results=5)
-                    if web_results:
-                        web_parts = [
-                            f"- [{r['title']}]({r['url']})\n  {r['snippet']}"
-                            for r in web_results
-                        ]
-                        web_text = "\n\n".join(web_parts)
-                        logger.info(
-                            "检索 Agent: session=%s 联网搜索到 %d 条结果",
-                            context.session_id, len(web_results),
-                        )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("检索 Agent: 联网搜索异常: %s", exc)
+            # 当前用户可访问的 RAG 知识库
+            try:
+                from app.capabilities.knowledge.service import get_knowledge_service
+
+                kb_results = await get_knowledge_service().search_for_current_user(
+                    context.message
+                )
+                knowledge_results.extend(kb_results)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("检索 Agent: RAG 知识库检索异常: %s", exc)
+
+            if knowledge_results:
+                knowledge_results.sort(key=lambda r: r.get("score", 0), reverse=True)
+                snippets = [self._format_snippet(r) for r in knowledge_results if r.get("text")]
+                knowledge_text = "\n---\n".join(snippets)
+                logger.info(
+                    "检索 Agent: session=%s 检索到 %d 条知识",
+                    context.session_id, len(knowledge_results),
+                )
 
         # ---- 按意图选择 system prompt ----
         if intent == "small_talk":
@@ -107,36 +103,48 @@ class RetrievalAgent(BaseAgent):
                 user_profile_text=context.user_profile_context,
             )
 
-        # 构建消息列表
-        messages = self._build_messages(
-            short_term=context.short_term_memory,
-            current_message=context.message,
-        )
+        # 联网搜索：knowledge_retrieval 且允许联网时，交由模型通过 Function Calling 决定是否调用
+        tools = []
+        if intent == "knowledge_retrieval" and context.web_search:
+            tools = self.select_tools(context)
 
-        # 调用 LLM 生成回复
-        try:
-            llm = get_llm_client()
-            reply = await llm.chat(
-                messages=messages,
-                system=system_prompt,
-                temperature=0.5,
-                max_tokens=2048,
-            )
-        except LLMError as exc:
-            logger.error("检索 Agent: LLM 调用失败: %s", exc)
-            raise
-
-        # 构建元数据
         metadata: Dict[str, Any] = {
             "mode": "knowledge_retrieval",
             "sources": [
-                {"text": r["text"][:200], "score": r["score"]}
+                {
+                    "text": r["text"][:200],
+                    "score": r["score"],
+                    **{k: r[k] for k in ("kb", "filename", "doc_id") if k in r},
+                }
                 for r in knowledge_results[:3]
             ],
             "recall_count": len(context.long_term_recall),
         }
+        return PreparedRun(system_prompt=system_prompt, tools=tools, metadata=metadata)
 
-        return AgentResponse(reply=reply.strip(), metadata=metadata)
+    def build_metadata(
+        self,
+        context: AgentContext,
+        prepared: PreparedRun,
+        new_messages: Sequence[BaseMessage],
+    ) -> Dict[str, Any]:
+        metadata = super().build_metadata(context, prepared, new_messages)
+        metadata["mode"] = "knowledge_retrieval"
+        web_results: List[Dict[str, str]] = []
+        for artifact in metadata.get("_artifacts", {}).get("web_search", []):
+            if isinstance(artifact, list):
+                web_results.extend(artifact)
+        metadata["web_sources"] = web_results[:5]
+        return metadata
+
+    @staticmethod
+    def _format_snippet(result: Dict[str, Any]) -> str:
+        """知识片段前加上来源（知识库 / 文件名），方便模型引用。"""
+        text = result.get("text", "")
+        source = " / ".join(
+            str(result[k]) for k in ("kb", "filename") if result.get(k)
+        )
+        return f"[来源: {source}]\n{text}" if source else text
 
     def _build_retrieval_prompt(
         self,
@@ -153,6 +161,7 @@ class RetrievalAgent(BaseAgent):
 
         if knowledge_text:
             parts.append(f"\n【本地知识库】\n{knowledge_text}")
+            parts.append("（引用本地知识库内容时请注明来源）")
 
         if web_text:
             parts.append(f"\n【联网搜索结果】\n{web_text}")
@@ -166,6 +175,7 @@ class RetrievalAgent(BaseAgent):
 
         parts.append(
             "\n【要求】回答简洁清晰，必要时分点说明。若涉及技术细节请确保准确。"
+            "本地资料不足或需要最新信息时，可调用联网搜索 / 网页抓取工具，并注明来源链接。"
         )
         return "\n".join(parts)
 

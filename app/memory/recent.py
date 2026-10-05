@@ -139,6 +139,19 @@ class ShortTermMemory:
         """删除会话短期记忆（clear 的别名）。"""
         await self.clear(session_id)
 
+    async def trim_head(self, session_id: str, count: int) -> None:
+        """移除最早的 count 条消息，保留之后追加的消息。
+
+        摘要压缩完成后调用：只删除已被压缩进摘要的那部分，
+        避免压缩期间新追加的对话被一并清空。
+        """
+        if count <= 0:
+            return
+        redis = await self._get_redis()
+        key = self._key(session_id)
+        await redis.ltrim(key, count, -1)
+        logger.info("短期记忆: session=%s 已移除最早的 %d 条消息", session_id, count)
+
 
 # 全局单例
 

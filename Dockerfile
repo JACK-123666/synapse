@@ -1,23 +1,28 @@
 # ============================================================
-# Synapse - 多 Agent 知识检索平台 Dockerfile
+# Synapse - 全能智能助手平台 Dockerfile
 # ============================================================
 FROM python:3.11-slim
 
 # 设置工作目录
 WORKDIR /app
 
-# 安装系统依赖
+# 安装系统依赖（git：代码仓库助手的本地仓库 / clone 功能）
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         curl \
+        git \
         && rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件并安装
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 复制应用代码
+# 复制应用代码与内置插件
 COPY app/ ./app/
+COPY plugins/ ./plugins/
+
+# 数据目录（SQLite、上传文件、仓库 clone、密钥文件），运行时由 docker-compose 挂载卷
+RUN mkdir -p /app/data
 
 # 注意：.env 不打包进镜像（含 API 密钥，入镜像层会泄漏）。
 # 运行时配置由 docker-compose 的 env_file 注入为环境变量，
@@ -30,5 +35,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# 启动命令
+# 启动命令（单 worker：定时任务调度器与异常检测状态在进程内）
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

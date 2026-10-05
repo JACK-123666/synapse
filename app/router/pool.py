@@ -83,6 +83,26 @@ class AgentRegistry:
             "注册表: 已注册路由 '%s' -> %s", intent, agent_ids
         )
 
+    def unregister_agent(self, agent_id: str) -> None:
+        """注销 Agent，并从所有路由中移除它（插件停用时使用）。"""
+        self._agents.pop(agent_id, None)
+        for intent in list(self._intent_routes):
+            remaining = [a for a in self._intent_routes[intent] if a != agent_id]
+            if remaining:
+                self._intent_routes[intent] = remaining
+            else:
+                self._intent_routes.pop(intent, None)
+        logger.info("注册表: 已注销 Agent '%s'", agent_id)
+
+    def unregister_route(self, intent: str) -> None:
+        """注销意图路由。"""
+        self._intent_routes.pop(intent, None)
+        logger.info("注册表: 已注销路由 '%s'", intent)
+
+    def get_routes(self) -> Dict[str, List[str]]:
+        """获取全部路由表（副本）。"""
+        return {k: list(v) for k, v in self._intent_routes.items()}
+
     # 查询
 
     def get_agent(self, agent_id: str) -> Optional[BaseAgent]:
