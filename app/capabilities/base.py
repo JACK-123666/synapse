@@ -54,15 +54,19 @@ class Capability(ABC):
     version: str = "1.0.0"
 
     def tools(self) -> List[ToolDecl]:
+        """本能力对外提供的工具。返回 BaseTool，或带标签 / 写标记 / 角色限制的 CapabilityTool。"""
         return []
 
     def intents(self) -> List[IntentSpec]:
+        """本能力注册的意图，会并入动态意图目录，三路识别器自动生效。"""
         return []
 
     def agents(self) -> List[BaseAgent]:
+        """本能力提供的专属 Agent。"""
         return []
 
     def routes(self) -> Dict[str, List[str]]:
+        """意图到 Agent 的降级链，主 Agent 在前、兜底 Agent 在后。"""
         return {}
 
     async def startup(self) -> None:

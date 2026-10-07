@@ -29,6 +29,7 @@ class RepoAgent(LangChainAgent):
 
 
 class RepoCapability(Capability):
+    """代码仓库能力：GitHub / GitLab / 本地 Git 的读写工具与 RepoAgent。"""
     name = "repo"
     description = "代码仓库助手"
 

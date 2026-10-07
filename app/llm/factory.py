@@ -132,9 +132,11 @@ class ChromaLocalEmbeddings(Embeddings):
         self._fn = embedding_functions.DefaultEmbeddingFunction()
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """批量向量化（LangChain Embeddings 接口）。"""
         return [[float(x) for x in vec] for vec in self._fn(list(texts))]
 
     def embed_query(self, text: str) -> List[float]:
+        """单条查询向量化（LangChain Embeddings 接口）。"""
         return self.embed_documents([text])[0]
 
 

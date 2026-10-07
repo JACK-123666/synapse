@@ -97,6 +97,7 @@ class MemoryAgent(LangChainAgent):
 
 
 class MemoryCapability(Capability):
+    """记忆能力：记忆检索工具与 MemoryAgent。"""
     name = "memory"
     description = "记忆检索"
 

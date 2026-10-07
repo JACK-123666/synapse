@@ -112,6 +112,7 @@ class LLMIntentRecognizer:
         catalog_examples = self._catalog.examples()
 
         def scores_for(target: str) -> str:
+            """为某个意图生成 few-shot 示例中的分数分布：目标意图 0.85，其余均分 0.15。"""
             rest = [i for i in intents if i != target]
             other = round(0.15 / len(rest), 2) if rest else 0.0
             scores = {i: (0.85 if i == target else other) for i in intents}

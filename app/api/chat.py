@@ -149,6 +149,7 @@ async def chat_stream(
     inp = _to_input(request, x_web_search)
 
     async def event_source() -> AsyncIterator[str]:
+        """把对话服务的事件流转成 SSE 文本；生成过程中的异常也转成 error 事件，避免连接被硬断。"""
         try:
             async for event in get_chat_service().stream(user, inp):
                 yield _sse(event)

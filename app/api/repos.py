@@ -16,6 +16,7 @@ router = APIRouter(prefix="/repos", tags=["代码仓库"])
 
 
 class RepoCreate(BaseModel):
+    """新增仓库连接的请求体；token 会加密后存储。"""
     name: str = Field(..., min_length=1, max_length=128, description="连接名称（对话中用它指代仓库）")
     provider: str = Field(..., description="github / gitlab / local")
     repo: str = Field(..., description="github/gitlab: owner/repo；local: 本地路径或 clone 地址")
@@ -26,6 +27,7 @@ class RepoCreate(BaseModel):
 
 
 class RepoUpdate(BaseModel):
+    """修改仓库连接的请求体。"""
     name: Optional[str] = None
     repo: Optional[str] = None
     token: Optional[str] = None
@@ -35,6 +37,7 @@ class RepoUpdate(BaseModel):
 
 
 class IndexRequest(BaseModel):
+    """把仓库代码索引进知识库的请求体。"""
     knowledge_base: str = Field(..., min_length=1, description="目标知识库名称（不存在时自动创建）")
     path_prefix: str = ""
     ref: str = ""
@@ -64,11 +67,13 @@ async def list_actions(
     status: Optional[str] = Query(None, description="pending / done / rejected / failed"),
     user: CurrentUser = Depends(get_current_user),
 ) -> List[Dict[str, Any]]:
+    """列出等待用户确认的仓库写操作。"""
     return await get_repo_service().list_actions(_who(user), status)
 
 
 @router.post("/actions/{action_id}/confirm", summary="确认并执行写操作")
 async def confirm_action(action_id: str, user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]:
+    """确认并执行一个待确认的写操作。"""
     try:
         return await get_repo_service().confirm_action(_who(user), action_id)
     except _ERRORS as exc:
@@ -77,6 +82,7 @@ async def confirm_action(action_id: str, user: CurrentUser = Depends(get_current
 
 @router.post("/actions/{action_id}/reject", summary="拒绝写操作")
 async def reject_action(action_id: str, user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]:
+    """拒绝一个待确认的写操作。"""
     try:
         return await get_repo_service().reject_action(_who(user), action_id)
     except _ERRORS as exc:
@@ -88,11 +94,13 @@ async def reject_action(action_id: str, user: CurrentUser = Depends(get_current_
 
 @router.get("", summary="仓库连接列表")
 async def list_repos(user: CurrentUser = Depends(get_current_user)) -> List[Dict[str, Any]]:
+    """列出当前用户连接的代码仓库。"""
     return await get_repo_service().list_connections(_who(user))
 
 
 @router.post("", summary="添加仓库连接")
 async def create_repo(req: RepoCreate, user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]:
+    """新增一个仓库连接（GitHub / GitLab / 本地 Git）。"""
     try:
         return await get_repo_service().create_connection(_who(user), **req.model_dump())
     except _ERRORS as exc:
@@ -103,6 +111,7 @@ async def create_repo(req: RepoCreate, user: CurrentUser = Depends(get_current_u
 async def update_repo(
     conn_id: str, req: RepoUpdate, user: CurrentUser = Depends(get_current_user)
 ) -> Dict[str, Any]:
+    """修改仓库连接的地址、令牌或写权限。"""
     try:
         return await get_repo_service().update_connection(
             _who(user), conn_id, **req.model_dump(exclude_none=True)
@@ -113,6 +122,7 @@ async def update_repo(
 
 @router.delete("/{conn_id}", summary="删除仓库连接")
 async def delete_repo(conn_id: str, user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]:
+    """删除仓库连接。"""
     try:
         await get_repo_service().delete_connection(_who(user), conn_id)
     except _ERRORS as exc:
@@ -122,6 +132,7 @@ async def delete_repo(conn_id: str, user: CurrentUser = Depends(get_current_user
 
 @router.post("/{conn_id}/test", summary="测试连接（读取最近一条提交）")
 async def test_repo(conn_id: str, user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]:
+    """测试仓库连接是否可用。"""
     try:
         conn, provider = await get_repo_service().provider(_who(user), conn_id)
         commits = await provider.list_commits(branch=conn.default_branch, limit=1)
@@ -138,6 +149,7 @@ async def list_commits(
     since: str = "",
     user: CurrentUser = Depends(get_current_user),
 ) -> List[Dict[str, Any]]:
+    """查看仓库的提交记录。"""
     try:
         conn, provider = await get_repo_service().provider(_who(user), conn_id)
         return await provider.list_commits(branch=branch or conn.default_branch, limit=limit, since=since)
@@ -153,6 +165,7 @@ async def changelog(
     branch: str = "",
     user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
+    """根据提交记录生成分组变更日志。"""
     try:
         text = await get_repo_service().changelog(
             _who(user), conn_id, since=since, limit=limit, branch=branch
@@ -166,6 +179,7 @@ async def changelog(
 async def index_repo(
     conn_id: str, req: IndexRequest, user: CurrentUser = Depends(get_current_user)
 ) -> Dict[str, Any]:
+    """把仓库文件索引进知识库，供代码问答使用。"""
     try:
         return await get_repo_service().index_to_knowledge(
             _who(user), conn_id, req.knowledge_base,

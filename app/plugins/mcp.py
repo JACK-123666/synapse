@@ -40,6 +40,7 @@ class McpError(Exception):
 
 
 def server_to_dict(row: McpServer) -> Dict[str, Any]:
+    """把 MCP 服务配置转成对外字典。"""
     config = dict(row.config or {})
     # 不回显敏感信息
     if "headers" in config:
@@ -92,6 +93,7 @@ class McpCapability(Capability):
         self._intent = intent or {}
 
     def tools(self):
+        """把 MCP 服务暴露的工具包装成 CapabilityTool，命名为 mcp_<服务名>_<工具名>。"""
         decls = []
         for tool in self._tools:
             meta = tool.metadata or {}
@@ -101,6 +103,7 @@ class McpCapability(Capability):
         return decls
 
     def intents(self):
+        """MCP 工具不注册专属意图，统一走 general_task 由通用 Agent 调用。"""
         if not self._intent.get("description"):
             return []
         return [IntentSpec(
@@ -120,6 +123,7 @@ class McpManager:
     # ---- 配置 CRUD ----
 
     async def list_servers(self) -> List[Dict[str, Any]]:
+        """列出已配置的 MCP 服务。"""
         async with session_scope() as session:
             rows = (await session.execute(select(McpServer).order_by(McpServer.created_at))).scalars().all()
             result = []
@@ -132,6 +136,7 @@ class McpManager:
     async def add_server(
         self, name: str, transport: str, config: Dict[str, Any], enabled: bool = True
     ) -> Dict[str, Any]:
+        """新增 MCP 服务并尝试立即连接。"""
         if not _NAME_RE.match(name):
             raise McpError("服务名只能包含字母、数字、下划线（最长 32）")
         build_connection(transport, config)
@@ -148,6 +153,7 @@ class McpManager:
         return data
 
     async def update_server(self, server_id: str, **fields: Any) -> Dict[str, Any]:
+        """修改 MCP 服务的配置。"""
         async with session_scope() as session:
             row = await session.get(McpServer, server_id)
             if row is None:
@@ -166,6 +172,7 @@ class McpManager:
         return data
 
     async def delete_server(self, server_id: str) -> None:
+        """删除 MCP 服务并注销它注册进来的工具。"""
         async with session_scope() as session:
             row = await session.get(McpServer, server_id)
             if row is None:
@@ -178,6 +185,7 @@ class McpManager:
     # ---- 加载 ----
 
     async def load_server(self, name: str) -> Dict[str, Any]:
+        """连接指定 MCP 服务，并把它的工具注册进工具注册表。"""
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
         async with session_scope() as session:
@@ -210,11 +218,13 @@ class McpManager:
         return self._status[name]
 
     async def unload_server(self, name: str) -> None:
+        """断开 MCP 服务并注销它的工具。"""
         await get_capability_manager().unregister(f"mcp_{name}")
         if name in self._status:
             self._status[name] = {"state": "not_loaded", "tools": [], "error": ""}
 
     async def load_all(self) -> None:
+        """连接全部已启用的 MCP 服务。"""
         try:
             async with session_scope() as session:
                 names = (
@@ -227,6 +237,7 @@ class McpManager:
             await self.load_server(name)
 
     async def reload_all(self) -> List[Dict[str, Any]]:
+        """重新连接全部 MCP 服务。"""
         for name in list(self._status):
             await self.unload_server(name)
         await self.load_all()
@@ -249,6 +260,7 @@ _manager: Optional[McpManager] = None
 
 
 def get_mcp_manager() -> McpManager:
+    """获取 MCP 管理器单例。"""
     global _manager
     if _manager is None:
         _manager = McpManager()

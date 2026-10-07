@@ -52,6 +52,7 @@ def get_engine() -> AsyncEngine:
 
 
 def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """获取异步会话工厂；首次调用时创建引擎。"""
     get_engine()
     assert _session_factory is not None
     return _session_factory
@@ -88,6 +89,7 @@ async def init_db() -> None:
 
 
 async def close_db() -> None:
+    """释放引擎与连接池（应用关闭时调用）。"""
     global _engine, _session_factory
     if _engine is not None:
         await _engine.dispose()

@@ -36,10 +36,12 @@ class CurrentUser:
 
     @property
     def is_admin(self) -> bool:
+        """该用户是否管理员。"""
         return self.role == "admin"
 
 
 def local_admin() -> CurrentUser:
+    """构造本地管理员身份；关闭鉴权时所有请求都使用它。"""
     return CurrentUser(id=LOCAL_ADMIN_ID, username=get_settings().admin_username, role="admin")
 
 

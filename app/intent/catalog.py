@@ -63,6 +63,7 @@ class IntentCatalog:
     # 注册 / 注销
 
     def register(self, spec: IntentSpec) -> None:
+        """注册一个意图。与 config 默认意图同名时只合并关键词与示例，不覆盖描述。"""
         with self._lock:
             existing = self._specs.get(spec.name)
             if existing is not None and existing.source == "config":
@@ -80,12 +81,14 @@ class IntentCatalog:
         logger.info("意图目录: 已注册意图 '%s' (来源=%s)", spec.name, spec.source)
 
     def unregister(self, name: str) -> None:
+        """注销一个意图；来自 config 的默认意图不受影响。"""
         with self._lock:
             spec = self._specs.get(name)
             if spec is not None and spec.source != "config":
                 self._specs.pop(name, None)
 
     def unregister_source(self, source: str) -> List[str]:
+        """注销某个来源注册的全部意图（插件停用时使用），返回被注销的名称列表。"""
         with self._lock:
             names = [n for n, s in self._specs.items() if s.source == source]
             for n in names:
@@ -97,25 +100,31 @@ class IntentCatalog:
     # 查询
 
     def names(self) -> List[str]:
+        """全部意图名称。"""
         with self._lock:
             return list(self._specs.keys())
 
     def get(self, name: str) -> Optional[IntentSpec]:
+        """按名称取意图定义。"""
         return self._specs.get(name)
 
     def specs(self) -> List[IntentSpec]:
+        """全部意图定义的快照。"""
         with self._lock:
             return list(self._specs.values())
 
     def descriptions(self) -> Dict[str, str]:
+        """{意图: 描述}，供 LLM 语义路构造分类 prompt。"""
         with self._lock:
             return {n: s.description for n, s in self._specs.items()}
 
     def keywords(self) -> Dict[str, List[str]]:
+        """{意图: 关键词列表}，供关键词路打分。"""
         with self._lock:
             return {n: list(s.keywords) for n, s in self._specs.items()}
 
     def examples(self) -> Dict[str, List[str]]:
+        """{意图: 示例语句}，供向量路建索引与 few-shot。"""
         with self._lock:
             return {n: list(s.examples) for n, s in self._specs.items()}
 

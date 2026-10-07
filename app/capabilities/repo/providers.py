@@ -59,40 +59,56 @@ class RepoProvider(ABC):
     @abstractmethod
     async def list_commits(
         self, branch: str = "", limit: int = 20, path: str = "", since: str = ""
-    ) -> List[Dict[str, Any]]: ...
+    ) -> List[Dict[str, Any]]:
+        """列出提交记录，可按分支、路径、起始时间过滤。"""
+        ...
 
     @abstractmethod
-    async def get_commit(self, sha: str) -> Dict[str, Any]: ...
+    async def get_commit(self, sha: str) -> Dict[str, Any]:
+        """查看单个提交的详情与 diff。"""
+        ...
 
     async def list_issues(self, state: str = "open", limit: int = 20) -> List[Dict[str, Any]]:
+        """列出 Issue。"""
         raise RepoError("该仓库类型不支持 Issue")
 
     async def get_issue(self, number: int) -> Dict[str, Any]:
+        """查看单个 Issue。"""
         raise RepoError("该仓库类型不支持 Issue")
 
     async def list_pulls(self, state: str = "open", limit: int = 20) -> List[Dict[str, Any]]:
+        """列出 PR / MR。"""
         raise RepoError("该仓库类型不支持 PR / MR")
 
     async def get_pull(self, number: int) -> Dict[str, Any]:
+        """查看单个 PR / MR。"""
         raise RepoError("该仓库类型不支持 PR / MR")
 
     @abstractmethod
-    async def read_file(self, path: str, ref: str = "") -> str: ...
+    async def read_file(self, path: str, ref: str = "") -> str:
+        """读取指定文件的文本内容。"""
+        ...
 
     @abstractmethod
-    async def list_dir(self, path: str = "", ref: str = "") -> List[Dict[str, Any]]: ...
+    async def list_dir(self, path: str = "", ref: str = "") -> List[Dict[str, Any]]:
+        """列出目录下的条目。"""
+        ...
 
     @abstractmethod
     async def list_files(self, ref: str = "") -> List[Dict[str, Any]]:
         """递归列出全部文件 [{path, size}]（用于索引）。"""
 
     @abstractmethod
-    async def search_code(self, query: str, limit: int = 20) -> List[Dict[str, Any]]: ...
+    async def search_code(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """在仓库中搜索代码。"""
+        ...
 
     async def create_issue(self, title: str, body: str) -> Dict[str, Any]:
+        """创建 Issue。属于写操作，只会生成待确认记录。"""
         raise RepoError("该仓库类型不支持创建 Issue")
 
     async def comment(self, number: int, body: str, kind: str = "issue") -> Dict[str, Any]:
+        """在 Issue 或 PR 上发表评论。属于写操作，只会生成待确认记录。"""
         raise RepoError("该仓库类型不支持评论")
 
 
@@ -100,6 +116,7 @@ class RepoProvider(ABC):
 
 
 class GitHubProvider(RepoProvider):
+    """GitHub REST API 的访问实现。"""
     provider_name = "github"
 
     def __init__(self, repo: str, token: str = "", base_url: str = "",
@@ -144,6 +161,7 @@ class GitHubProvider(RepoProvider):
         return resp.json()
 
     async def list_commits(self, branch="", limit=20, path="", since=""):
+        """列出提交记录，可按分支、路径、起始时间过滤。"""
         data = await self._get(
             f"/repos/{self.repo}/commits",
             sha=_check_ref(branch), per_page=min(limit, 100), path=_check_path(path), since=since,
@@ -160,6 +178,7 @@ class GitHubProvider(RepoProvider):
         ]
 
     async def get_commit(self, sha):
+        """查看单个提交的详情与 diff。"""
         c = await self._get(f"/repos/{self.repo}/commits/{_check_ref(sha)}")
         return {
             "sha": c["sha"],
@@ -181,6 +200,7 @@ class GitHubProvider(RepoProvider):
         }
 
     async def list_issues(self, state="open", limit=20):
+        """列出 Issue。"""
         data = await self._get(f"/repos/{self.repo}/issues", state=state, per_page=min(limit, 100))
         return [
             {
@@ -197,6 +217,7 @@ class GitHubProvider(RepoProvider):
         ][:limit]
 
     async def get_issue(self, number):
+        """查看单个 Issue。"""
         issue = await self._get(f"/repos/{self.repo}/issues/{int(number)}")
         comments = await self._get(f"/repos/{self.repo}/issues/{int(number)}/comments", per_page=20)
         return {
@@ -213,6 +234,7 @@ class GitHubProvider(RepoProvider):
         }
 
     async def list_pulls(self, state="open", limit=20):
+        """列出 PR / MR。"""
         data = await self._get(f"/repos/{self.repo}/pulls", state=state, per_page=min(limit, 100))
         return [
             {
@@ -229,6 +251,7 @@ class GitHubProvider(RepoProvider):
         ]
 
     async def get_pull(self, number):
+        """查看单个 PR / MR。"""
         pr = await self._get(f"/repos/{self.repo}/pulls/{int(number)}")
         files = await self._get(f"/repos/{self.repo}/pulls/{int(number)}/files", per_page=100)
         return {
@@ -253,6 +276,7 @@ class GitHubProvider(RepoProvider):
         }
 
     async def read_file(self, path, ref=""):
+        """读取指定文件的文本内容。"""
         data = await self._get(
             f"/repos/{self.repo}/contents/{quote(_check_path(path))}", ref=_check_ref(ref)
         )
@@ -264,6 +288,7 @@ class GitHubProvider(RepoProvider):
         return content
 
     async def list_dir(self, path="", ref=""):
+        """列出目录下的条目。"""
         data = await self._get(
             f"/repos/{self.repo}/contents/{quote(_check_path(path))}", ref=_check_ref(ref)
         )
@@ -276,6 +301,7 @@ class GitHubProvider(RepoProvider):
         return info.get("default_branch", "main")
 
     async def list_files(self, ref=""):
+        """递归列出仓库中的文件，用于建立索引。"""
         ref = _check_ref(ref) or await self._default_branch()
         data = await self._get(f"/repos/{self.repo}/git/trees/{ref}", recursive=1)
         return [
@@ -285,15 +311,18 @@ class GitHubProvider(RepoProvider):
         ]
 
     async def search_code(self, query, limit=20):
+        """在仓库中搜索代码。"""
         data = await self._get("/search/code", q=f"{query} repo:{self.repo}", per_page=min(limit, 50))
         return [{"path": item["path"], "url": item.get("html_url", "")} for item in data.get("items", [])]
 
     async def create_issue(self, title, body):
+        """创建 Issue。属于写操作，只会生成待确认记录。"""
         issue = await self._post(f"/repos/{self.repo}/issues", {"title": title, "body": body})
         return {"number": issue["number"], "url": issue.get("html_url", "")}
 
     async def comment(self, number, body, kind="issue"):
         # GitHub 的 PR 与 Issue 共用评论接口
+        """在 Issue 或 PR 上发表评论。属于写操作，只会生成待确认记录。"""
         c = await self._post(f"/repos/{self.repo}/issues/{int(number)}/comments", {"body": body})
         return {"url": c.get("html_url", "")}
 
@@ -302,6 +331,7 @@ class GitHubProvider(RepoProvider):
 
 
 class GitLabProvider(RepoProvider):
+    """GitLab REST API 的访问实现。"""
     provider_name = "gitlab"
 
     def __init__(self, repo: str, token: str = "", base_url: str = "",
@@ -342,6 +372,7 @@ class GitLabProvider(RepoProvider):
         return {"open": "opened", "closed": "closed", "all": "all", "merged": "merged"}.get(state, state)
 
     async def list_commits(self, branch="", limit=20, path="", since=""):
+        """列出提交记录，可按分支、路径、起始时间过滤。"""
         data = await self._request("GET", f"/projects/{self.project}/repository/commits", params={
             "ref_name": _check_ref(branch), "per_page": min(limit, 100),
             "path": _check_path(path), "since": since,
@@ -358,6 +389,7 @@ class GitLabProvider(RepoProvider):
         ]
 
     async def get_commit(self, sha):
+        """查看单个提交的详情与 diff。"""
         sha = _check_ref(sha)
         c = await self._request("GET", f"/projects/{self.project}/repository/commits/{sha}")
         diffs = await self._request("GET", f"/projects/{self.project}/repository/commits/{sha}/diff")
@@ -375,6 +407,7 @@ class GitLabProvider(RepoProvider):
         }
 
     async def list_issues(self, state="open", limit=20):
+        """列出 Issue。"""
         data = await self._request("GET", f"/projects/{self.project}/issues", params={
             "state": self._state(state), "per_page": min(limit, 100),
         })
@@ -392,6 +425,7 @@ class GitLabProvider(RepoProvider):
         ]
 
     async def get_issue(self, number):
+        """查看单个 Issue。"""
         issue = await self._request("GET", f"/projects/{self.project}/issues/{int(number)}")
         notes = await self._request(
             "GET", f"/projects/{self.project}/issues/{int(number)}/notes",
@@ -411,6 +445,7 @@ class GitLabProvider(RepoProvider):
         }
 
     async def list_pulls(self, state="open", limit=20):
+        """列出 PR / MR。"""
         data = await self._request("GET", f"/projects/{self.project}/merge_requests", params={
             "state": self._state(state), "per_page": min(limit, 100),
         })
@@ -429,6 +464,7 @@ class GitLabProvider(RepoProvider):
         ]
 
     async def get_pull(self, number):
+        """查看单个 PR / MR。"""
         mr = await self._request("GET", f"/projects/{self.project}/merge_requests/{int(number)}")
         try:
             diffs = await self._request(
@@ -456,6 +492,7 @@ class GitLabProvider(RepoProvider):
         }
 
     async def read_file(self, path, ref=""):
+        """读取指定文件的文本内容。"""
         path = quote(_check_path(path), safe="")
         return await self._request(
             "GET", f"/projects/{self.project}/repository/files/{path}/raw",
@@ -463,12 +500,14 @@ class GitLabProvider(RepoProvider):
         )
 
     async def list_dir(self, path="", ref=""):
+        """列出目录下的条目。"""
         data = await self._request("GET", f"/projects/{self.project}/repository/tree", params={
             "path": _check_path(path), "ref": _check_ref(ref), "per_page": 100,
         })
         return [{"path": d["path"], "type": "dir" if d["type"] == "tree" else "file", "size": 0} for d in data]
 
     async def list_files(self, ref=""):
+        """递归列出仓库中的文件，用于建立索引。"""
         files: List[Dict[str, Any]] = []
         for page in range(1, 21):
             data = await self._request("GET", f"/projects/{self.project}/repository/tree", params={
@@ -480,6 +519,7 @@ class GitLabProvider(RepoProvider):
         return files
 
     async def search_code(self, query, limit=20):
+        """在仓库中搜索代码。"""
         data = await self._request("GET", f"/projects/{self.project}/search", params={
             "scope": "blobs", "search": query, "per_page": min(limit, 50),
         })
@@ -489,12 +529,14 @@ class GitLabProvider(RepoProvider):
         ]
 
     async def create_issue(self, title, body):
+        """创建 Issue。属于写操作，只会生成待确认记录。"""
         issue = await self._request(
             "POST", f"/projects/{self.project}/issues", payload={"title": title, "description": body}
         )
         return {"number": issue["iid"], "url": issue.get("web_url", "")}
 
     async def comment(self, number, body, kind="issue"):
+        """在 Issue 或 PR 上发表评论。属于写操作，只会生成待确认记录。"""
         target = "merge_requests" if kind in ("mr", "pr", "pull") else "issues"
         note = await self._request(
             "POST", f"/projects/{self.project}/{target}/{int(number)}/notes", payload={"body": body}
@@ -564,6 +606,7 @@ class LocalGitProvider(RepoProvider):
             self._last_fetch[key] = time.monotonic()
 
     async def list_commits(self, branch="", limit=20, path="", since=""):
+        """列出提交记录，可按分支、路径、起始时间过滤。"""
         await self.ensure_ready()
         args = [
             "log", f"--max-count={max(1, min(limit, 200))}", "--date=iso-strict",
@@ -585,6 +628,7 @@ class LocalGitProvider(RepoProvider):
         return commits
 
     async def get_commit(self, sha):
+        """查看单个提交的详情与 diff。"""
         await self.ensure_ready()
         sha = _check_ref(sha)
         meta = await self._git("show", "-s", "--date=iso-strict", "--format=%H%x1f%an%x1f%ad%x1f%B", sha)
@@ -602,10 +646,12 @@ class LocalGitProvider(RepoProvider):
         }
 
     async def read_file(self, path, ref=""):
+        """读取指定文件的文本内容。"""
         await self.ensure_ready()
         return await self._git("show", f"{_check_ref(ref) or 'HEAD'}:{_check_path(path)}")
 
     async def list_dir(self, path="", ref=""):
+        """列出目录下的条目。"""
         await self.ensure_ready()
         path = _check_path(path)
         target = f"{path.rstrip('/')}/" if path else ""
@@ -626,6 +672,7 @@ class LocalGitProvider(RepoProvider):
         return items
 
     async def list_files(self, ref=""):
+        """递归列出仓库中的文件，用于建立索引。"""
         await self.ensure_ready()
         out = await self._git("ls-tree", "-r", "--long", _check_ref(ref) or "HEAD")
         files = []
@@ -637,6 +684,7 @@ class LocalGitProvider(RepoProvider):
         return files
 
     async def search_code(self, query, limit=20):
+        """在仓库中搜索代码。"""
         await self.ensure_ready()
         out = await self._git(
             "grep", "-n", "-I", "-i", "--max-count=3", "-e", query, "HEAD", check=False

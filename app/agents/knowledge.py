@@ -132,6 +132,7 @@ class RetrievalAgent(LangChainAgent):
         prepared: PreparedRun,
         new_messages: Sequence[BaseMessage],
     ) -> Dict[str, Any]:
+        """在通用元数据之上补充知识来源与联网引用。"""
         metadata = super().build_metadata(context, prepared, new_messages)
         metadata["mode"] = "knowledge_retrieval"
         web_results: List[Dict[str, str]] = []

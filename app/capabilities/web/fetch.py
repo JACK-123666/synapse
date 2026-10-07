@@ -40,6 +40,7 @@ class FetchError(Exception):
 
 @dataclass
 class FetchResult:
+    """抓取结果：最终 URL、标题、正文，以及正文是否被截断。"""
     url: str
     final_url: str
     status: int

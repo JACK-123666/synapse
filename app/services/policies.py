@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 async def load_tool_policies() -> Dict[str, List[str]]:
+    """启动时把数据库里的角色工具白名单加载进工具注册表。"""
     registry = get_tool_registry()
     async with session_scope() as session:
         rows = (await session.execute(select(ToolPolicy))).scalars().all()

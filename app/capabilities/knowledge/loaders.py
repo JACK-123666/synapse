@@ -22,6 +22,7 @@ class UnsupportedFileType(ValueError):
 
 
 def decode_text(data: bytes) -> str:
+    """依次尝试 UTF-8 与 GB18030，都失败时用替换字符兜底，保证解码不抛异常。"""
     for enc in ("utf-8-sig", "gb18030"):
         try:
             return data.decode(enc)

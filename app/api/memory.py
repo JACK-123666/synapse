@@ -31,6 +31,7 @@ async def list_memories(
     user_id: Optional[str] = Query(None, description="关闭鉴权时可按 user_id 筛选"),
     user: CurrentUser = Depends(get_current_user),
 ) -> List[Dict[str, Any]]:
+    """按时间倒序列出长期记忆摘要。"""
     return await get_long_term_memory().list_summaries(
         user_id=_memory_user(user, user_id), limit=limit, offset=offset
     )
@@ -43,6 +44,7 @@ async def search_memories(
     user_id: Optional[str] = Query(None),
     user: CurrentUser = Depends(get_current_user),
 ) -> List[Dict[str, Any]]:
+    """在长期记忆摘要中做语义检索。"""
     return await get_long_term_memory().recall(
         query_text=q, top_k=top_k, user_id=_memory_user(user, user_id)
     )
@@ -108,6 +110,7 @@ async def get_session(
     session_id: str,
     user: CurrentUser = Depends(get_current_user),
 ) -> List[Dict[str, Any]]:
+    """查看某个会话的短期记忆（最近若干条消息）。"""
     return await get_short_term_memory().get_messages(session_key_for(user.id, session_id))
 
 
@@ -142,6 +145,7 @@ async def get_profile(
     user_id: Optional[str] = Query(None),
     user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
+    """查看用户画像（偏好、高频术语、交互次数）。"""
     target = _memory_user(user, user_id)
     if not target:
         raise HTTPException(status_code=400, detail="关闭鉴权时请提供 user_id")
@@ -193,6 +197,7 @@ async def delete_memory(
     record_id: str,
     user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
+    """删除一条长期记忆摘要。"""
     owner = user.id if get_settings().auth_enabled and not user.is_admin else None
     if not await get_long_term_memory().delete_summary(record_id, user_id=owner):
         raise HTTPException(status_code=404, detail="记忆不存在")

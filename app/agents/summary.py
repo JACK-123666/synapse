@@ -65,6 +65,7 @@ class SummarizationAgent(LangChainAgent):
         return await super().execute(context)
 
     async def stream(self, context: AgentContext) -> AsyncIterator[Dict[str, Any]]:
+        """流式摘要；没有可摘要的内容时直接返回提示语。"""
         if not self._gather_content(context):
             response = self._empty_response()
             yield {"type": "token", "content": response.reply}
@@ -74,6 +75,7 @@ class SummarizationAgent(LangChainAgent):
             yield event
 
     async def prepare(self, context: AgentContext) -> PreparedRun:
+        """收集待摘要内容并构造提示词，不使用任何工具。"""
         content = self._gather_content(context)
         return PreparedRun(
             system_prompt=_SYSTEM_PROMPT,
@@ -87,6 +89,7 @@ class SummarizationAgent(LangChainAgent):
         prepared: Optional[PreparedRun] = None,
     ) -> List[BaseMessage]:
         # 摘要场景的内容来自 _gather_content，不使用通用上下文块
+        """摘要内容来自 _gather_content，因此不注入通用上下文块。"""
         content_to_summarize = self._gather_content(context)
         user_prompt = f"请总结以下内容:\n\n{content_to_summarize}"
         return [HumanMessage(content=user_prompt)]
@@ -97,6 +100,7 @@ class SummarizationAgent(LangChainAgent):
         prepared: PreparedRun,
         new_messages: Sequence[BaseMessage],
     ) -> Dict[str, Any]:
+        """补充摘要长度等元数据。"""
         metadata = super().build_metadata(context, prepared, new_messages)
         metadata["mode"] = "summarize"
         reply_len = sum(len(str(getattr(m, "content", ""))) for m in new_messages)

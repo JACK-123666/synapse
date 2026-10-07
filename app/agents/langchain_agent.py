@@ -162,6 +162,7 @@ class LangChainAgent(BaseAgent):
         return self.system_prompt or f"你是 Synapse 智能助手中的「{self.description}」。"
 
     def select_tools(self, context: AgentContext) -> List[BaseTool]:
+        """按当前用户的角色与标签，从工具注册表挑出本 Agent 可用的工具。"""
         if self.tool_tags is not None and len(self.tool_tags) == 0:
             return []
         return get_tool_registry().tools_for(
@@ -203,6 +204,7 @@ class LangChainAgent(BaseAgent):
         return messages
 
     async def prepare(self, context: AgentContext) -> PreparedRun:
+        """执行前的准备：拼系统提示词、选出工具。子类可覆写做更复杂的预处理。"""
         return PreparedRun(
             system_prompt=self.build_system_prompt(context),
             tools=self.select_tools(context),
@@ -214,6 +216,7 @@ class LangChainAgent(BaseAgent):
         prepared: PreparedRun,
         new_messages: Sequence[BaseMessage],
     ) -> Dict[str, Any]:
+        """从本轮消息中提取工具调用记录与产物，作为响应元数据。"""
         info = collect_tool_info(new_messages)
         metadata: Dict[str, Any] = {"mode": self.agent_id, **prepared.metadata}
         metadata["tool_calls"] = info["tool_calls"]
@@ -241,6 +244,7 @@ class LangChainAgent(BaseAgent):
         return _compiled_agent(spec, tool_names, prepared.system_prompt)
 
     async def execute(self, context: AgentContext) -> AgentResponse:
+        """执行一次完整调用并返回回复。"""
         prepared = await self.prepare(context)
         inputs = self.build_messages(context, prepared)
         try:
@@ -270,6 +274,7 @@ class LangChainAgent(BaseAgent):
         return AgentResponse(reply=reply.strip(), metadata=metadata)
 
     async def stream(self, context: AgentContext) -> AsyncIterator[Dict[str, Any]]:
+        """流式执行，逐 token 产出事件。带工具时自己跑 ReAct 循环，确保真正逐字输出。"""
         prepared = await self.prepare(context)
         inputs = self.build_messages(context, prepared)
         new_messages: List[BaseMessage] = []

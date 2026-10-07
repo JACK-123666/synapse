@@ -44,11 +44,13 @@ class Principal:
 
 
 def current_principal() -> Principal:
+    """从请求上下文取出当前用户，作为权限判断的主体。"""
     ctx = get_request_context()
     return Principal(user_id=ctx.user_id, is_admin=ctx.is_admin)
 
 
 def kb_to_dict(kb: KnowledgeBase, document_count: Optional[int] = None) -> Dict[str, Any]:
+    """把知识库对象转成对外字典。"""
     data = {
         "id": kb.id,
         "name": kb.name,
@@ -63,6 +65,7 @@ def kb_to_dict(kb: KnowledgeBase, document_count: Optional[int] = None) -> Dict[
 
 
 def doc_to_dict(doc: Document) -> Dict[str, Any]:
+    """把文档对象转成对外字典。"""
     return {
         "id": doc.id,
         "kb_id": doc.kb_id,
@@ -135,6 +138,7 @@ class KnowledgeService:
         description: str = "",
         visibility: str = "private",
     ) -> Dict[str, Any]:
+        """创建知识库。同一用户下名称不能重复。"""
         name = name.strip()
         if not name:
             raise KnowledgeError("知识库名称不能为空")
@@ -164,6 +168,7 @@ class KnowledgeService:
             return kb_to_dict(kb, document_count=0)
 
     async def list_kbs(self, who: Principal) -> List[Dict[str, Any]]:
+        """列出该用户可访问的知识库，并附带各自的文档数。"""
         async with session_scope() as session:
             stmt = select(KnowledgeBase).order_by(KnowledgeBase.created_at)
             if not who.is_admin:
@@ -181,6 +186,7 @@ class KnowledgeService:
             return [kb_to_dict(kb, counts.get(kb.id, 0)) for kb in kbs]
 
     async def get_kb(self, who: Principal, kb_id: str) -> Dict[str, Any]:
+        """查看单个知识库。无权限时按「不存在」处理，不泄露它是否真的存在。"""
         async with session_scope() as session:
             kb = await self._get_kb(session, kb_id, who)
             count = (
@@ -213,6 +219,7 @@ class KnowledgeService:
         description: Optional[str] = None,
         visibility: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """修改知识库的名称、描述或可见性。"""
         async with session_scope() as session:
             kb = await self._get_kb(session, kb_id, who, write=True)
             if name is not None and name.strip():
@@ -226,6 +233,7 @@ class KnowledgeService:
             return kb_to_dict(kb)
 
     async def delete_kb(self, who: Principal, kb_id: str) -> None:
+        """删除知识库，连同它的 Chroma 集合与保存的原文。"""
         async with session_scope() as session:
             kb = await self._get_kb(session, kb_id, who, write=True)
             collection_name = kb.collection_name
@@ -245,6 +253,7 @@ class KnowledgeService:
     # ---- 文档 ----
 
     async def list_documents(self, who: Principal, kb_id: str) -> List[Dict[str, Any]]:
+        """列出知识库中的文档。"""
         async with session_scope() as session:
             await self._get_kb(session, kb_id, who)
             docs = (
@@ -257,6 +266,7 @@ class KnowledgeService:
     async def ingest_file(
         self, who: Principal, kb_id: str, filename: str, data: bytes
     ) -> Dict[str, Any]:
+        """解析上传的文件 → 切片 → 向量化 → 写入 Chroma，并把原文另存一份供日后重建索引。"""
         max_bytes = self._settings.upload_max_mb * 1024 * 1024
         if len(data) > max_bytes:
             raise KnowledgeError(f"文件超过 {self._settings.upload_max_mb}MB 上限")
@@ -330,6 +340,7 @@ class KnowledgeService:
         return result
 
     async def ingest_url(self, who: Principal, kb_id: str, url: str) -> Dict[str, Any]:
+        """抓取网页正文后按同样的流程入库。"""
         from app.capabilities.web.fetch import fetch_page
 
         page = await fetch_page(url)
@@ -369,6 +380,7 @@ class KnowledgeService:
         return len(chunks)
 
     async def delete_document(self, who: Principal, doc_id: str) -> None:
+        """删除文档记录、它的全部向量以及保存的原文。"""
         async with session_scope() as session:
             doc = await session.get(Document, doc_id)
             if doc is None:
@@ -423,6 +435,7 @@ class KnowledgeService:
     # ---- 检索 ----
 
     async def readable_kbs(self, who: Principal, kb_ids: Optional[Iterable[str]] = None) -> List[KnowledgeBase]:
+        """筛选出该用户可读的知识库。"""
         async with session_scope() as session:
             stmt = select(KnowledgeBase)
             if kb_ids is not None:
@@ -487,6 +500,7 @@ class KnowledgeService:
     async def search_for_current_user(
         self, query: str, kb_name: Optional[str] = None, top_k: Optional[int] = None
     ) -> List[Dict[str, Any]]:
+        """用请求上下文里的当前用户执行检索（供 Agent 与工具调用）。"""
         who = current_principal()
         kb_ids: Optional[List[str]] = None
         if kb_name:
@@ -497,6 +511,7 @@ class KnowledgeService:
         return await self.search(who, query, kb_ids=kb_ids, top_k=top_k)
 
     async def get_or_create_kb_for_current_user(self, name: str) -> KnowledgeBase:
+        """按名称取知识库；不存在时自动创建一个私有库。"""
         who = current_principal()
         kb = await self.find_kb(who, name)
         if kb is not None:
@@ -509,6 +524,7 @@ class KnowledgeService:
         return found
 
     async def ingest_url_for_current_user(self, kb_id: str, url: str) -> Dict[str, Any]:
+        """用当前用户身份抓取网页并入库。"""
         return await self.ingest_url(current_principal(), kb_id, url)
 
 
@@ -516,6 +532,7 @@ _service: Optional[KnowledgeService] = None
 
 
 def get_knowledge_service() -> KnowledgeService:
+    """获取知识库服务单例。"""
     global _service
     if _service is None:
         _service = KnowledgeService()

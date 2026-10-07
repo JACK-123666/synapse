@@ -52,6 +52,7 @@ class LLMClient:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """运行时切换提供商 / 模型 / 密钥 / base_url，实际由配置对象执行。"""
         return self.config.switch(
             provider=provider, model=model, api_key=api_key, base_url=base_url
         )

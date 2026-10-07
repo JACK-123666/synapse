@@ -43,6 +43,7 @@ class RequestContext:
 
     @property
     def is_admin(self) -> bool:
+        """当前用户是否管理员。"""
         return self.role == "admin"
 
 
@@ -58,14 +59,17 @@ def get_request_context() -> RequestContext:
 
 
 def has_request_context() -> bool:
+    """当前是否处于某个请求上下文中。"""
     return _current.get() is not None
 
 
 def set_request_context(ctx: RequestContext) -> Token:
+    """设置请求上下文，返回用于还原的 Token。"""
     return _current.set(ctx)
 
 
 def reset_request_context(token: Token) -> None:
+    """还原到设置之前的上下文。"""
     _current.reset(token)
 
 

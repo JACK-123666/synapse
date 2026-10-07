@@ -16,6 +16,7 @@ router = APIRouter(prefix="/schedules", tags=["定时任务"])
 
 
 class ScheduleCreate(BaseModel):
+    """创建定时任务的请求体；when 支持「每天 9 点」这类自然语言。"""
     name: str = Field(..., min_length=1, max_length=128)
     when: str = Field(..., description="cron 表达式（分 时 日 月 周）或自然语言，如“每天早上 9 点”")
     kind: str = Field(default="prompt", description=f"任务类型：{' / '.join(KINDS)}")
@@ -28,6 +29,7 @@ class ScheduleCreate(BaseModel):
 
 
 class ScheduleUpdate(BaseModel):
+    """修改定时任务的请求体。"""
     name: Optional[str] = None
     when: Optional[str] = None
     payload: Optional[Dict[str, Any]] = None
@@ -36,6 +38,7 @@ class ScheduleUpdate(BaseModel):
 
 
 class ParseRequest(BaseModel):
+    """把自然语言解析成 cron 的请求体。"""
     text: str = Field(..., min_length=1)
 
 
@@ -50,6 +53,7 @@ def _http_error(exc: ScheduleError) -> HTTPException:
 
 @router.post("/parse", summary="把时间描述解析为 cron，并给出接下来的执行时间")
 async def parse(req: ParseRequest, _: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]:
+    """把「每天早上 9 点」这类描述解析成 cron 表达式（不落库）。"""
     try:
         cron = await to_cron(req.text)
     except ScheduleError as exc:
@@ -59,11 +63,13 @@ async def parse(req: ParseRequest, _: CurrentUser = Depends(get_current_user)) -
 
 @router.get("", summary="定时任务列表")
 async def list_schedules(user: CurrentUser = Depends(get_current_user)) -> List[Dict[str, Any]]:
+    """列出当前用户的定时任务。"""
     return await get_scheduler_service().list(_who(user))
 
 
 @router.post("", summary="创建定时任务")
 async def create_schedule(req: ScheduleCreate, user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]:
+    """创建一个定时任务。"""
     try:
         cron = await to_cron(req.when)
         return await get_scheduler_service().create(
@@ -76,6 +82,7 @@ async def create_schedule(req: ScheduleCreate, user: CurrentUser = Depends(get_c
 
 @router.get("/{schedule_id}", summary="定时任务详情")
 async def get_schedule(schedule_id: str, user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]:
+    """查看单个定时任务。"""
     try:
         return await get_scheduler_service().get(_who(user), schedule_id)
     except ScheduleError as exc:
@@ -86,6 +93,7 @@ async def get_schedule(schedule_id: str, user: CurrentUser = Depends(get_current
 async def update_schedule(
     schedule_id: str, req: ScheduleUpdate, user: CurrentUser = Depends(get_current_user)
 ) -> Dict[str, Any]:
+    """修改定时任务。"""
     try:
         fields = req.model_dump(exclude_none=True)
         if "when" in fields:
@@ -97,6 +105,7 @@ async def update_schedule(
 
 @router.delete("/{schedule_id}", summary="删除定时任务")
 async def delete_schedule(schedule_id: str, user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]:
+    """删除定时任务。"""
     try:
         await get_scheduler_service().delete(_who(user), schedule_id)
     except ScheduleError as exc:
@@ -106,6 +115,7 @@ async def delete_schedule(schedule_id: str, user: CurrentUser = Depends(get_curr
 
 @router.post("/{schedule_id}/run", summary="立即执行一次")
 async def run_schedule(schedule_id: str, user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]:
+    """立即手动执行一次定时任务。"""
     try:
         return await get_scheduler_service().run_now(_who(user), schedule_id)
     except ScheduleError as exc:
@@ -118,6 +128,7 @@ async def list_runs(
     limit: int = Query(20, ge=1, le=200),
     user: CurrentUser = Depends(get_current_user),
 ) -> List[Dict[str, Any]]:
+    """查看定时任务的执行历史。"""
     try:
         return await get_scheduler_service().runs(_who(user), schedule_id, limit)
     except ScheduleError as exc:

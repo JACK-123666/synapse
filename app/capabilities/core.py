@@ -14,6 +14,7 @@ from app.intent.catalog import IntentSpec
 
 
 class CoreCapability(Capability):
+    """核心能力：四个基础 Agent 与三条默认路由。必须最先注册，其他能力的路由依赖它。"""
     name = "core"
     description = "核心对话：知识问答、摘要、闲聊、通用任务"
 

@@ -43,6 +43,7 @@ _SECTIONS = OrderedDict([
 
 
 def conn_to_dict(conn: RepoConnection) -> Dict[str, Any]:
+    """把仓库连接转成对外字典，不包含令牌明文。"""
     return {
         "id": conn.id,
         "name": conn.name,
@@ -58,6 +59,7 @@ def conn_to_dict(conn: RepoConnection) -> Dict[str, Any]:
 
 
 def action_to_dict(action: PendingAction) -> Dict[str, Any]:
+    """把待确认的写操作转成对外字典。"""
     return {
         "id": action.id,
         "kind": action.kind,
@@ -112,6 +114,7 @@ class RepoService:
         default_branch: str = "",
         allow_write: bool = False,
     ) -> Dict[str, Any]:
+        """新增仓库连接；访问令牌加密后才入库。"""
         name, provider, repo = name.strip(), provider.strip().lower(), repo.strip()
         if not name or not repo:
             raise RepoError("name 与 repo 不能为空")
@@ -146,6 +149,7 @@ class RepoService:
             return conn_to_dict(conn)
 
     async def list_connections(self, who: Principal) -> List[Dict[str, Any]]:
+        """列出该用户的仓库连接。"""
         async with session_scope() as session:
             stmt = select(RepoConnection).order_by(RepoConnection.created_at)
             if not who.is_admin:
@@ -182,6 +186,7 @@ class RepoService:
     async def update_connection(
         self, who: Principal, conn_id: str, **fields: Any
     ) -> Dict[str, Any]:
+        """修改仓库连接的地址、令牌或写权限。"""
         async with session_scope() as session:
             conn = await session.get(RepoConnection, conn_id)
             if conn is None or not (conn.owner_id == who.user_id or who.is_admin):
@@ -196,6 +201,7 @@ class RepoService:
             return conn_to_dict(conn)
 
     async def delete_connection(self, who: Principal, conn_id: str) -> None:
+        """删除仓库连接。"""
         async with session_scope() as session:
             conn = await session.get(RepoConnection, conn_id)
             if conn is None or not (conn.owner_id == who.user_id or who.is_admin):
@@ -203,6 +209,7 @@ class RepoService:
             await session.delete(conn)
 
     def provider_for(self, conn: RepoConnection) -> RepoProvider:
+        """根据连接类型构造对应的访问实现。"""
         token = decrypt_secret(conn.token_encrypted)
         if conn.provider == "github":
             return GitHubProvider(conn.repo, token=token, base_url=conn.base_url)
@@ -212,6 +219,7 @@ class RepoService:
         return LocalGitProvider(conn.repo, clone_dir=clone_dir)
 
     async def provider(self, who: Principal, name_or_id: str = "") -> tuple:
+        """按名称或 ID 取连接，返回 (连接, 访问实现)。"""
         conn = await self.get_connection(who, name_or_id)
         return conn, self.provider_for(conn)
 
@@ -220,6 +228,7 @@ class RepoService:
     async def changelog(
         self, who: Principal, name_or_id: str = "", *, since: str = "", limit: int = 50, branch: str = ""
     ) -> str:
+        """拉取提交并生成分组变更日志。"""
         conn, provider = await self.provider(who, name_or_id)
         commits = await provider.list_commits(
             branch=branch or conn.default_branch, limit=limit, since=since
@@ -276,11 +285,13 @@ class RepoService:
     # ---- 写操作（二次确认） ----
 
     def write_allowed(self, conn: RepoConnection) -> bool:
+        """该连接是否允许写操作：需要全局开关与连接级开关同时打开。"""
         return get_settings().repo_write_enabled and conn.allow_write
 
     async def propose_action(
         self, who: Principal, conn: RepoConnection, kind: str, payload: Dict[str, Any], summary: str
     ) -> Dict[str, Any]:
+        """登记一个待用户确认的写操作，不直接执行。"""
         if not self.write_allowed(conn):
             raise PermissionError(
                 "该仓库未开启写操作（需管理员设置 REPO_WRITE_ENABLED=true 并为仓库连接开启 allow_write）"
@@ -297,6 +308,7 @@ class RepoService:
             return action_to_dict(action)
 
     async def list_actions(self, who: Principal, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        """列出待确认的写操作。"""
         async with session_scope() as session:
             stmt = select(PendingAction).order_by(PendingAction.created_at.desc())
             if not who.is_admin:
@@ -314,6 +326,7 @@ class RepoService:
         return action
 
     async def confirm_action(self, who: Principal, action_id: str) -> Dict[str, Any]:
+        """执行已经确认的写操作。"""
         async with session_scope() as session:
             action = await self._get_pending(session, who, action_id)
             kind, payload = action.kind, dict(action.payload or {})
@@ -341,6 +354,7 @@ class RepoService:
             return action_to_dict(action)
 
     async def reject_action(self, who: Principal, action_id: str) -> Dict[str, Any]:
+        """拒绝一个待确认的写操作。"""
         async with session_scope() as session:
             action = await self._get_pending(session, who, action_id)
             action.status, action.resolved_at = "rejected", utcnow()
@@ -349,6 +363,7 @@ class RepoService:
     # 便捷：基于请求上下文
 
     async def provider_for_current_user(self, name_or_id: str = "") -> tuple:
+        """用当前用户身份取连接与访问实现。"""
         return await self.provider(current_principal(), name_or_id)
 
 
@@ -356,6 +371,7 @@ _service: Optional[RepoService] = None
 
 
 def get_repo_service() -> RepoService:
+    """获取仓库服务单例。"""
     global _service
     if _service is None:
         _service = RepoService()

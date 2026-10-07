@@ -61,6 +61,7 @@ class ChatResult:
     tool_calls: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
+        """转成 API 响应字段。"""
         return {
             "reply": self.reply,
             "intent": self.intent,
@@ -83,6 +84,7 @@ class ChatService:
     """对话编排。"""
 
     def build_request_context(self, user: CurrentUser, inp: ChatInput) -> RequestContext:
+        """根据登录用户与请求参数组装请求上下文。"""
         settings = get_settings()
         # 关闭鉴权时沿用请求体里的 user_id（旧行为）；开启鉴权时强制使用登录用户，防止冒用
         memory_user_id = user.id if settings.auth_enabled else inp.user_id
@@ -250,6 +252,7 @@ _service: Optional[ChatService] = None
 
 
 def get_chat_service() -> ChatService:
+    """获取对话编排服务单例。"""
     global _service
     if _service is None:
         _service = ChatService()

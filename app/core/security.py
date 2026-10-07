@@ -51,6 +51,7 @@ def get_app_secret() -> str:
 
 
 def reset_secret_cache() -> None:
+    """清空应用密钥缓存（测试或轮换密钥时使用）。"""
     global _cached_secret
     _cached_secret = None
 
@@ -64,10 +65,12 @@ def _pw_bytes(password: str) -> bytes:
 
 
 def hash_password(password: str) -> str:
+    """用 bcrypt 生成密码哈希。"""
     return bcrypt.hashpw(_pw_bytes(password), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(password: str, hashed: str) -> bool:
+    """校验明文密码与存储的哈希是否匹配。"""
     if not hashed:
         return False
     try:
@@ -103,6 +106,7 @@ def decode_access_token(token: str) -> Dict[str, Any]:
 
 
 def hash_api_key(plain: str) -> str:
+    """计算 API Key 的 SHA-256。数据库里只保存这个值，不存明文。"""
     return hashlib.sha256(plain.encode("utf-8")).hexdigest()
 
 
@@ -113,6 +117,7 @@ def generate_api_key() -> Tuple[str, str, str]:
 
 
 def looks_like_api_key(value: str) -> bool:
+    """判断一串凭证是不是本系统的 API Key（以 syn- 开头）。"""
     return value.startswith(_API_KEY_PREFIX)
 
 
@@ -125,12 +130,14 @@ def _fernet() -> Fernet:
 
 
 def encrypt_secret(plain: str) -> str:
+    """用 Fernet 加密敏感字段（如仓库访问令牌）。"""
     if not plain:
         return ""
     return _fernet().encrypt(plain.encode("utf-8")).decode("utf-8")
 
 
 def decrypt_secret(token: str) -> str:
+    """解密敏感字段。密钥变更导致解密失败时返回空串并记录日志，不抛异常。"""
     if not token:
         return ""
     try:

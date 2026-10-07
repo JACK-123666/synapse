@@ -34,6 +34,7 @@ _MAX_OUTPUT = 8000
 
 
 def schedule_to_dict(s: Schedule, with_next: bool = True) -> Dict[str, Any]:
+    """把定时任务转成对外字典；with_next 为真时附带接下来几次执行时间。"""
     data = {
         "id": s.id,
         "name": s.name,
@@ -57,6 +58,7 @@ def schedule_to_dict(s: Schedule, with_next: bool = True) -> Dict[str, Any]:
 
 
 def run_to_dict(r: ScheduleRun) -> Dict[str, Any]:
+    """把一次执行记录转成对外字典。"""
     return {
         "id": r.id,
         "schedule_id": r.schedule_id,
@@ -106,9 +108,11 @@ class SchedulerService:
 
     @property
     def running(self) -> bool:
+        """调度器当前是否在运行。"""
         return self._scheduler is not None and self._scheduler.running
 
     async def start(self) -> None:
+        """启动 APScheduler，并把数据库中已启用的任务装载进调度器。"""
         settings = get_settings()
         if not settings.scheduler_enabled:
             logger.info("定时任务调度器未启用（SCHEDULER_ENABLED=false）")
@@ -128,6 +132,7 @@ class SchedulerService:
         logger.info("定时任务调度器已启动，加载 %d 个任务", len(rows))
 
     async def shutdown(self) -> None:
+        """停止调度器并释放线程池。"""
         if self._scheduler is not None:
             self._scheduler.shutdown(wait=False)
             self._scheduler = None
@@ -155,6 +160,7 @@ class SchedulerService:
             self._scheduler.remove_job(schedule_id)
 
     def job_ids(self) -> List[str]:
+        """当前调度器里已装载的任务 ID 列表。"""
         return [job.id for job in self._scheduler.get_jobs()] if self.running else []
 
     # ---- CRUD ----
@@ -166,6 +172,7 @@ class SchedulerService:
         return schedule
 
     async def find(self, who: Principal, name_or_id: str) -> Schedule:
+        """按名称或 ID 查找任务；找不到时抛异常。"""
         async with session_scope() as session:
             schedule = await session.get(Schedule, name_or_id)
             if schedule is not None and (schedule.owner_id == who.user_id or who.is_admin):
@@ -191,6 +198,7 @@ class SchedulerService:
         enabled: bool = True,
         session_id: str = "",
     ) -> Dict[str, Any]:
+        """创建定时任务：解析时间表达式、落库、装载进调度器。"""
         name = name.strip()
         if not name:
             raise ScheduleError("任务名称不能为空")
@@ -224,6 +232,7 @@ class SchedulerService:
         return data
 
     async def list(self, who: Principal) -> List[Dict[str, Any]]:
+        """列出该用户创建的定时任务。"""
         async with session_scope() as session:
             stmt = select(Schedule).order_by(Schedule.created_at)
             if not who.is_admin:
@@ -231,10 +240,12 @@ class SchedulerService:
             return [schedule_to_dict(s) for s in (await session.execute(stmt)).scalars().all()]
 
     async def get(self, who: Principal, schedule_id: str) -> Dict[str, Any]:
+        """查看单个定时任务。"""
         async with session_scope() as session:
             return schedule_to_dict(await self._get(session, who, schedule_id))
 
     async def update(self, who: Principal, schedule_id: str, **fields: Any) -> Dict[str, Any]:
+        """修改定时任务；时间表达式变化时会重新装载调度。"""
         async with session_scope() as session:
             schedule = await self._get(session, who, schedule_id)
             if fields.get("name"):
@@ -255,12 +266,14 @@ class SchedulerService:
         return data
 
     async def delete(self, who: Principal, schedule_id: str) -> None:
+        """删除定时任务，并从调度器卸载。"""
         async with session_scope() as session:
             schedule = await self._get(session, who, schedule_id)
             await session.delete(schedule)
         self._remove_job(schedule_id)
 
     async def runs(self, who: Principal, schedule_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """查看某个任务的执行历史。"""
         async with session_scope() as session:
             await self._get(session, who, schedule_id)
             rows = (
@@ -274,6 +287,7 @@ class SchedulerService:
             return [run_to_dict(r) for r in rows]
 
     async def run_now(self, who: Principal, schedule_id: str) -> Dict[str, Any]:
+        """立即手动执行一次任务，不影响原有调度。"""
         async with session_scope() as session:
             await self._get(session, who, schedule_id)
         return await self.execute(schedule_id)
@@ -433,6 +447,7 @@ _service: Optional[SchedulerService] = None
 
 
 def get_scheduler_service() -> SchedulerService:
+    """获取定时任务服务单例。"""
     global _service
     if _service is None:
         _service = SchedulerService()

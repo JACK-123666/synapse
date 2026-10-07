@@ -51,6 +51,7 @@ class PluginError(Exception):
 
 @dataclass
 class PluginManifest:
+    """插件清单（plugin.yaml）：名称、入口、权限等元信息。"""
     name: str
     path: Path
     version: str = "0.0.0"
@@ -61,6 +62,7 @@ class PluginManifest:
 
     @classmethod
     def load(cls, plugin_dir: Path) -> "PluginManifest":
+        """从插件目录读取并校验清单，或加载插件模块并注册为能力。"""
         manifest_file = plugin_dir / "plugin.yaml"
         data = yaml.safe_load(manifest_file.read_text(encoding="utf-8")) or {}
         name = str(data.get("name") or plugin_dir.name)
@@ -82,6 +84,7 @@ class PluginManifest:
 
 @dataclass
 class PluginRecord:
+    """插件的运行时状态：是否启用、是否已加载、失败原因。"""
     manifest: PluginManifest
     enabled: bool = True
     loaded: bool = False
@@ -101,6 +104,7 @@ class _PermissionFilteredCapability(Capability):
         self.version = inner.version
 
     def tools(self):
+        """转发内层工具声明；插件未声明 write 权限时过滤掉写操作工具。"""
         result = []
         for decl in self._inner.tools():
             if isinstance(decl, CapabilityTool) and decl.write and not self._allow_write:
@@ -112,18 +116,23 @@ class _PermissionFilteredCapability(Capability):
         return result
 
     def intents(self):
+        """转发内层意图声明。"""
         return self._inner.intents()
 
     def agents(self):
+        """转发内层 Agent 声明。"""
         return self._inner.agents()
 
     def routes(self):
+        """转发内层路由声明。"""
         return self._inner.routes()
 
     async def startup(self) -> None:
+        """转发内层 startup 钩子。"""
         await self._inner.startup()
 
     async def shutdown(self) -> None:
+        """转发内层 shutdown 钩子。"""
         await self._inner.shutdown()
 
 
@@ -135,11 +144,13 @@ class PluginManager:
 
     @property
     def plugins_dir(self) -> Path:
+        """插件目录的绝对路径；不存在时自动创建。"""
         return Path(get_settings().plugins_dir)
 
     # ---- 发现 ----
 
     def discover(self) -> Dict[str, PluginManifest]:
+        """扫描插件目录，返回 {插件名: 清单}。"""
         manifests: Dict[str, PluginManifest] = {}
         root = self.plugins_dir
         if not root.is_dir():
@@ -230,6 +241,7 @@ class PluginManager:
                 sys.modules.pop(mod, None)
 
     async def load(self, name: str) -> PluginRecord:
+        """从插件目录读取并校验清单，或加载插件模块并注册为能力。"""
         manifests = self.discover()
         manifest = manifests.get(name)
         if manifest is None:
@@ -258,6 +270,7 @@ class PluginManager:
         return record
 
     async def unload(self, name: str, refresh: bool = True) -> None:
+        """注销能力并移除已加载的模块；refresh=True 时顺带重建意图向量索引。"""
         record = self._records.get(name)
         if record is None or not record.loaded:
             return
@@ -269,6 +282,7 @@ class PluginManager:
             await self._refresh_intents()
 
     async def load_all(self) -> None:
+        """扫描并加载全部插件（应用启动时调用）。"""
         states = await self._states()
         for name, manifest in self.discover().items():
             enabled = states.get(name, True)
@@ -282,12 +296,14 @@ class PluginManager:
         )
 
     async def enable(self, name: str) -> PluginRecord:
+        """启用插件并持久化状态。"""
         await self._save_state(name, True)
         record = await self.load(name)
         record.enabled = True
         return record
 
     async def disable(self, name: str) -> PluginRecord:
+        """停用插件并持久化状态。"""
         if name not in self.discover() and name not in self._records:
             raise PluginError(f"插件不存在: {name}")
         await self._save_state(name, False)
@@ -298,12 +314,14 @@ class PluginManager:
         return record
 
     async def reload(self, name: str) -> PluginRecord:
+        """重新加载单个插件（先卸载再加载），用于本地开发热更新。"""
         record = self._records.get(name)
         if record is not None and not record.enabled:
             raise PluginError(f"插件 {name} 已停用，请先启用")
         return await self.load(name)
 
     async def reload_all(self) -> List[Dict[str, Any]]:
+        """重新加载全部插件。"""
         for name in list(self._records):
             await self.unload(name, refresh=False)
         self._records.clear()
@@ -320,6 +338,7 @@ class PluginManager:
             logger.warning("刷新意图索引失败（不影响插件使用）: %s", exc)
 
     def list(self) -> List[Dict[str, Any]]:
+        """列出全部插件及其状态。"""
         manager = get_capability_manager()
         info = {c["name"]: c for c in manager.list()}
         result = []
@@ -345,6 +364,7 @@ _manager: Optional[PluginManager] = None
 
 
 def get_plugin_manager() -> PluginManager:
+    """获取插件管理器单例。"""
     global _manager
     if _manager is None:
         _manager = PluginManager()

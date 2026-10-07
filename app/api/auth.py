@@ -15,16 +15,19 @@ router = APIRouter(prefix="/auth", tags=["鉴权"])
 
 
 class LoginRequest(BaseModel):
+    """登录请求体。"""
     username: str = Field(..., min_length=1)
     password: str = Field(..., min_length=1)
 
 
 class PasswordChangeRequest(BaseModel):
+    """修改自己密码的请求体，需要提供原密码做二次校验。"""
     old_password: str
     new_password: str = Field(..., min_length=6)
 
 
 class ApiKeyCreateRequest(BaseModel):
+    """创建 API Key 的请求体。"""
     name: str = Field(default="default", max_length=64)
 
 
@@ -36,6 +39,7 @@ async def auth_config() -> Dict[str, Any]:
 
 @router.post("/login", summary="用户名密码登录，返回 JWT")
 async def login(req: LoginRequest) -> Dict[str, Any]:
+    """校验用户名密码。失败返回 401，成功返回 JWT 与用户信息。"""
     result = await user_service.login(req.username, req.password)
     if result is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误")
@@ -44,6 +48,7 @@ async def login(req: LoginRequest) -> Dict[str, Any]:
 
 @router.get("/me", summary="当前用户")
 async def me(user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]:
+    """返回当前登录用户的身份信息。"""
     return {"id": user.id, "username": user.username, "role": user.role}
 
 
@@ -52,6 +57,7 @@ async def change_password(
     req: PasswordChangeRequest,
     user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
+    """先校验原密码，通过后更新为新密码。"""
     if await user_service.authenticate(user.username, req.old_password) is None:
         raise HTTPException(status_code=400, detail="原密码错误")
     try:
@@ -63,6 +69,7 @@ async def change_password(
 
 @router.get("/api-keys", summary="我的 API Key 列表")
 async def list_api_keys(user: CurrentUser = Depends(get_current_user)) -> List[Dict[str, Any]]:
+    """列出当前用户的 API Key。数据库只存哈希，因此这里拿不到明文。"""
     return await user_service.list_api_keys(user.id)
 
 
@@ -71,6 +78,7 @@ async def create_api_key(
     req: ApiKeyCreateRequest,
     user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
+    """签发一个新的 API Key。明文只在本次响应中返回一次，之后无法再取回。"""
     return await user_service.create_api_key(user.id, req.name)
 
 
@@ -79,6 +87,7 @@ async def revoke_api_key(
     key_id: str,
     user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
+    """吊销指定的 API Key。"""
     try:
         await user_service.revoke_api_key(user.id, key_id, is_admin=user.is_admin)
     except user_service.UserError as exc:
@@ -92,12 +101,14 @@ users_router = APIRouter(prefix="/users", tags=["用户管理"])
 
 
 class UserCreateRequest(BaseModel):
+    """管理员创建用户的请求体。"""
     username: str = Field(..., min_length=1, max_length=64)
     password: str = Field(..., min_length=6)
     role: str = Field(default="user", description="admin / user")
 
 
 class UserUpdateRequest(BaseModel):
+    """管理员修改用户的请求体；字段为 None 表示保持原值。"""
     role: Optional[str] = None
     is_active: Optional[bool] = None
     password: Optional[str] = Field(default=None, min_length=6)
@@ -108,6 +119,7 @@ _admin_only = require_admin
 
 @users_router.get("", summary="用户列表")
 async def list_users(_: CurrentUser = Depends(_admin_only)) -> List[Dict[str, Any]]:
+    """列出全部用户（仅管理员）。"""
     return await user_service.list_users()
 
 
@@ -115,6 +127,7 @@ async def list_users(_: CurrentUser = Depends(_admin_only)) -> List[Dict[str, An
 async def create_user(
     req: UserCreateRequest, _: CurrentUser = Depends(_admin_only)
 ) -> Dict[str, Any]:
+    """创建用户（仅管理员）。"""
     try:
         return await user_service.create_user(req.username, req.password, req.role)
     except user_service.UserError as exc:
@@ -125,6 +138,7 @@ async def create_user(
 async def update_user(
     user_id: str, req: UserUpdateRequest, _: CurrentUser = Depends(_admin_only)
 ) -> Dict[str, Any]:
+    """修改用户的角色、启用状态或密码（仅管理员）。"""
     try:
         return await user_service.update_user(
             user_id, role=req.role, is_active=req.is_active, password=req.password
@@ -135,6 +149,7 @@ async def update_user(
 
 @users_router.delete("/{user_id}", summary="删除用户")
 async def delete_user(user_id: str, _: CurrentUser = Depends(_admin_only)) -> Dict[str, Any]:
+    """删除用户（仅管理员）。不允许删除自己，避免把管理员删空。"""
     try:
         await user_service.delete_user(user_id)
     except user_service.UserError as exc:

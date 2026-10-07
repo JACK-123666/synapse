@@ -34,6 +34,7 @@ class WebAgent(LangChainAgent):
 
 
 class WebCapability(Capability):
+    """网页能力：联网搜索、网页抓取、股票行情、抓取入库。"""
     name = "web"
     description = "网页抓取与联网搜索"
 

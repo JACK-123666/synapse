@@ -14,6 +14,7 @@ from app.intent.catalog import IntentSpec
 
 
 class KnowledgeCapability(Capability):
+    """RAG 知识库能力：知识库检索工具，并把相关关键词并入 knowledge_retrieval 意图。"""
     name = "knowledge"
     description = "RAG 知识库问答"
 

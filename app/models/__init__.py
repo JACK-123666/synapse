@@ -22,10 +22,12 @@ from app.core.db import Base
 
 
 def new_id() -> str:
+    """生成 32 位十六进制的随机主键。"""
     return uuid.uuid4().hex
 
 
 def utcnow() -> datetime:
+    """当前 UTC 时间（带时区），作为所有表的时间戳默认值。"""
     return datetime.now(timezone.utc)
 
 

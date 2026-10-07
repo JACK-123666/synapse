@@ -127,16 +127,17 @@ class SchedulerAgent(LangChainAgent):
     description = "定时任务助手"
     tool_tags = ("schedule",)
 
-    def build_system_prompt(self, context: AgentContext) -> str:
-        return "\n".join([
-            "你负责管理用户的定时任务：创建、查看、暂停 / 恢复、删除、立即执行。",
-            "创建任务时把用户描述拆成：名称、执行时间（when，保留用户原话即可）、要执行的指令（task）。",
-            "用户要求“网页有变化时通知我”时使用 create_web_watch。",
-            "创建成功后告诉用户 cron 表达式和接下来的执行时间。",
-        ])
+    # 静态提示词：记忆召回 / 用户画像由 build_context_block 注入消息序列
+    system_prompt = (
+        "你负责管理用户的定时任务：创建、查看、暂停 / 恢复、删除、立即执行。\n"
+        "创建任务时把用户描述拆成：名称、执行时间（when，保留用户原话即可）、要执行的指令（task）。\n"
+        "用户要求“网页有变化时通知我”时使用 create_web_watch。\n"
+        "创建成功后告诉用户 cron 表达式和接下来的执行时间。"
+    )
 
 
 class SchedulerCapability(Capability):
+    """定时任务能力：任务管理工具与 SchedulerAgent。"""
     name = "scheduler"
     description = "定时任务"
 
@@ -176,7 +177,9 @@ class SchedulerCapability(Capability):
         return {"schedule_task": ["scheduler_agent", "general_agent", "fallback_agent"]}
 
     async def startup(self) -> None:
+        """能力注册完成后启动调度器，并装载数据库中已有的任务。"""
         await get_scheduler_service().start()
 
     async def shutdown(self) -> None:
+        """停用该能力时停止调度器。"""
         await get_scheduler_service().shutdown()

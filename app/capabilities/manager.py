@@ -159,6 +159,7 @@ class CapabilityManager:
         logger.info("能力管理器: 已注销 '%s'", name)
 
     async def shutdown_all(self) -> None:
+        """依次关闭所有已注册的能力（例如停止调度器）。"""
         for name in list(self._registered):
             record = self._registered[name]
             try:
@@ -167,10 +168,12 @@ class CapabilityManager:
                 logger.warning("能力 '%s' shutdown 失败: %s", name, exc)
 
     def get(self, name: str) -> Optional[Capability]:
+        """按名称取出已注册的能力。"""
         record = self._registered.get(name)
         return record.capability if record else None
 
     def list(self) -> List[Dict[str, Any]]:
+        """列出已注册能力的摘要信息，供 /capabilities 接口使用。"""
         return [
             {
                 "name": name,
@@ -196,6 +199,7 @@ _manager: Optional[CapabilityManager] = None
 
 
 def get_capability_manager() -> CapabilityManager:
+    """获取能力管理器单例。"""
     global _manager
     if _manager is None:
         _manager = CapabilityManager()

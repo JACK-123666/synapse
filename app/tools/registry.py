@@ -79,9 +79,11 @@ class ToolEntry:
 
     @property
     def name(self) -> str:
+        """工具名。"""
         return self.tool.name
 
     def to_dict(self) -> Dict[str, Any]:
+        """转成对外字典，供 /plugins/tools 展示。"""
         return {
             "name": self.tool.name,
             "description": self.tool.description,
@@ -118,6 +120,7 @@ class ToolRegistry:
         write: bool = False,
         roles: Optional[Iterable[str]] = None,
     ) -> ToolEntry:
+        """注册一个工具。同名工具被不同来源覆盖时记 warning。"""
         entry = ToolEntry(
             tool=tool,
             source=source,
@@ -137,6 +140,7 @@ class ToolRegistry:
         return entry
 
     def unregister(self, name: str) -> None:
+        """按名称注销单个工具。"""
         with self._lock:
             self._entries.pop(name, None)
 
@@ -153,13 +157,16 @@ class ToolRegistry:
     # 查询
 
     def get(self, name: str) -> Optional[BaseTool]:
+        """按名称取工具实例。"""
         entry = self._entries.get(name)
         return entry.tool if entry else None
 
     def entry(self, name: str) -> Optional[ToolEntry]:
+        """按名称取工具条目（含来源、标签、写标记、角色限制等元数据）。"""
         return self._entries.get(name)
 
     def entries(self) -> List[ToolEntry]:
+        """返回全部工具条目的快照。"""
         with self._lock:
             return list(self._entries.values())
 
@@ -174,10 +181,12 @@ class ToolRegistry:
                 self._policies[role] = list(patterns)
 
     def get_policies(self) -> Dict[str, List[str]]:
+        """返回各角色的工具白名单。"""
         with self._lock:
             return {k: list(v) for k, v in self._policies.items()}
 
     def is_allowed(self, entry: ToolEntry, role: str) -> bool:
+        """该角色能否使用这个工具：先看工具自身的角色限制，再看角色白名单；admin 不受白名单限制。"""
         if entry.roles and role not in entry.roles:
             return False
         if role == "admin":

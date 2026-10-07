@@ -251,6 +251,7 @@ async def shutdown() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    """应用生命周期：启动时按序初始化各模块，关闭时按相反顺序释放资源。"""
     await startup()
     try:
         yield

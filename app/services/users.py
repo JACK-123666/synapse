@@ -29,6 +29,7 @@ class UserError(ValueError):
 
 
 def user_to_dict(user: User) -> Dict[str, object]:
+    """把用户对象转成对外字典（不含密码哈希）。"""
     return {
         "id": user.id,
         "username": user.username,
@@ -72,6 +73,7 @@ async def bootstrap_admin() -> None:
 
 
 async def authenticate(username: str, password: str) -> Optional[User]:
+    """校验用户名与密码。成功返回用户对象，失败返回 None。"""
     async with session_scope() as session:
         user = (
             await session.execute(select(User).where(User.username == username))
@@ -84,6 +86,7 @@ async def authenticate(username: str, password: str) -> Optional[User]:
 
 
 async def login(username: str, password: str) -> Optional[Dict[str, object]]:
+    """登录：校验通过后签发 JWT 并返回用户信息。"""
     user = await authenticate(username, password)
     if user is None:
         return None
@@ -97,18 +100,21 @@ async def login(username: str, password: str) -> Optional[Dict[str, object]]:
 
 
 async def list_users() -> List[Dict[str, object]]:
+    """列出全部用户。"""
     async with session_scope() as session:
         rows = (await session.execute(select(User).order_by(User.created_at))).scalars().all()
         return [user_to_dict(u) for u in rows]
 
 
 async def get_user(user_id: str) -> Optional[Dict[str, object]]:
+    """按 ID 查询用户。"""
     async with session_scope() as session:
         user = await session.get(User, user_id)
         return user_to_dict(user) if user else None
 
 
 async def create_user(username: str, password: str, role: str = "user") -> Dict[str, object]:
+    """创建用户；用户名重复时抛 UserError。"""
     username = username.strip()
     if not username or len(password) < 6:
         raise UserError("用户名不能为空，密码至少 6 位")
@@ -133,6 +139,7 @@ async def update_user(
     is_active: Optional[bool] = None,
     password: Optional[str] = None,
 ) -> Dict[str, object]:
+    """修改用户的角色、启用状态或密码。"""
     async with session_scope() as session:
         user = await session.get(User, user_id)
         if user is None:
@@ -155,6 +162,7 @@ async def update_user(
 
 
 async def delete_user(user_id: str) -> None:
+    """删除用户；不允许删除自己，避免把管理员删空。"""
     if user_id == LOCAL_ADMIN_ID:
         raise UserError("初始管理员不能删除")
     async with session_scope() as session:
@@ -196,6 +204,7 @@ async def create_api_key(user_id: str, name: str = "default") -> Dict[str, objec
 
 
 async def list_api_keys(user_id: str) -> List[Dict[str, object]]:
+    """列出某个用户的 API Key。"""
     async with session_scope() as session:
         rows = (
             await session.execute(
@@ -206,6 +215,7 @@ async def list_api_keys(user_id: str) -> List[Dict[str, object]]:
 
 
 async def revoke_api_key(user_id: str, key_id: str, is_admin: bool = False) -> None:
+    """吊销 API Key；非管理员只能吊销自己的。"""
     async with session_scope() as session:
         key = await session.get(ApiKey, key_id)
         if key is None or (key.user_id != user_id and not is_admin):
