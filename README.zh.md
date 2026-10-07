@@ -138,28 +138,90 @@ INTENT_KEYWORD_WEIGHT=0.2
 
 ```
 app/
-├── main.py                 FastAPI 入口（lifespan：数据库、能力、插件、调度器）
-├── config.py               所有可配参数
-├── store.py                Redis / ChromaDB 连接单例
-├── api/                    chat（含 /chat/stream）、system、auth、knowledge、memory、repos、schedules、plugins
-├── core/                   请求上下文、数据库、安全（JWT / API Key / 加密）、鉴权依赖、后台任务托管
-├── models/                 ORM：用户、知识库、仓库连接、定时任务、插件状态……
-├── services/               对话编排、用户、工具白名单
+├── main.py                     FastAPI 入口；lifespan 启动顺序（配置 → 数据库 → 能力 → 插件 → 意图索引 → 自愈循环）
+├── config.py                   所有可配参数（pydantic-settings，环境变量 / .env）
+├── store.py                    Redis / ChromaDB 连接单例（Chroma 连接失败有 30 秒冷却）
+│
+├── api/                        HTTP 层，每个资源组一个模块
+│   ├── chat.py                 POST /chat、POST /chat/stream（SSE）、GET /chat 页面
+│   ├── system.py               /health、/metrics、/models、/capabilities
+│   ├── auth.py                 登录、JWT、API Key、/users
+│   ├── knowledge.py            知识库、文档上传 / 检索 / 重建索引
+│   ├── memory.py               记忆浏览与检索
+│   ├── repos.py                仓库连接、提交、变更日志、索引、写操作确认
+│   ├── schedules.py            定时任务增删改查、cron 解析、执行历史
+│   └── plugins.py              插件列表 / 启停 / 重载、MCP 服务、工具白名单
+│
+├── core/                       平台底座，不含业务逻辑
+│   ├── context.py              contextvars 里的 RequestContext（用户、会话、模型覆盖）
+│   ├── db.py                   SQLAlchemy 2.0 异步引擎、session_scope
+│   ├── security.py             bcrypt、JWT、API Key 哈希、Fernet 加密
+│   ├── deps.py                 get_current_user / require_admin 两个鉴权依赖
+│   └── tasks.py                后台任务托管：spawn() 持强引用，关闭时 drain()
+│
+├── services/
+│   ├── chat.py                 对话编排主链路：prepare → dispatch → 更新记忆
+│   ├── users.py                用户、登录、API Key
+│   └── policies.py             角色 → 工具白名单（落库，启动时加载）
+│
 ├── llm/
-│   ├── config.py           LLM 运行时配置（运行时覆盖 > .env）
-│   ├── gateway.py          LLM 统一入口（chat / embed，单一 LangChain 后端）
-│   └── factory.py          LangChain ChatModel / Embeddings 工厂
-├── intent/                 三路融合 + 动态意图目录（catalog.py）
-├── router/                 Agent 注册表、分发与降级（含流式）
-├── agents/                 BaseAgent、LangChainAgent、知识检索、摘要、通用、兜底
-├── capabilities/           内置能力：core / knowledge / memory / web / repo / scheduler
-├── plugins/                本地插件管理器、MCP 接入
-├── memory/                 短期 / 长期 / 压缩 / 画像
-├── observability/          异常检测与自愈、Prometheus 指标
-├── tools/                  工具注册表、联网搜索
-└── static/index.html       聊天页
-plugins/example_plugin/     示例插件
-tests/                      pytest（外部依赖全部本地替身）
+│   ├── config.py               运行时配置；运行时覆盖优先于 .env
+│   ├── factory.py              按解析出的配置创建并缓存 ChatModel / Embeddings
+│   ├── gateway.py              chat() / embed() 统一入口（单一 LangChain 后端）
+│   └── messages.py             dict 与 LangChain 消息互转
+│
+├── intent/                     意图识别
+│   ├── catalog.py              动态意图目录：配置默认值 + 各能力/插件注册的意图
+│   ├── semantic.py             LLM 语义路（few-shot；意图变多后自动生成 prompt）
+│   ├── vector.py               向量相似度路（Chroma；目录变化时自动重建索引）
+│   ├── keyword.py              关键词投票路
+│   └── blend.py                融合：便宜两路短路 → 加权投票 → 某路失败时重分配权重
+│
+├── router/
+│   ├── pool.py                 Agent 注册表 + 意图 → Agent 路由表
+│   └── route.py                分发、按权重排序、降级（含流式）
+│
+├── agents/
+│   ├── base.py                 BaseAgent / AgentContext / AgentResponse
+│   ├── langchain_agent.py      LangChainAgent：按标签+角色选工具、静态 system prompt、缓存 Agent 图
+│   ├── knowledge.py            RetrievalAgent —— RAG 上下文、闲聊、摘要兜底
+│   ├── summary.py              SummarizationAgent —— 不用工具，支持流式
+│   └── safety.py               FallbackAgent —— 绝不抛异常、绝不调 LLM
+│
+├── capabilities/               每个能力一个包，各自注册 工具 + 意图 + Agent + 路由
+│   ├── base.py                 Capability 接口 + CapabilityTool 声明
+│   ├── manager.py              注册 / 热重载；未提供 Agent 时自动生成 <能力名>_agent
+│   ├── core.py                 四个基础 Agent 及其路由
+│   ├── knowledge/              loaders（txt/md/pdf/docx/html/代码）· service（切片 → 向量化 → 检索）· tools
+│   ├── memory/                 记忆检索工具 + MemoryAgent
+│   ├── web/                    fetch（防 SSRF 的正文提取）· tools（搜索 / 抓取 / 存入知识库）
+│   ├── repo/                   providers（GitHub/GitLab/本地 Git）· service（连接、变更日志）· tools
+│   └── scheduler/              cron 解析 · APScheduler 服务 · Webhook 投递
+│
+├── plugins/
+│   ├── manager.py              本地 Python 插件：发现、清单、启停、热重载
+│   └── mcp.py                  MCP 服务 → 工具命名为 mcp_<服务名>_<工具名>
+│
+├── memory/
+│   ├── recent.py               短期记忆（Redis、TTL、裁剪）
+│   ├── archive.py              长期摘要（Chroma）+ 兼容保留的全局知识库
+│   ├── compress.py             阈值判断 → LLM 摘要 → 入库 → 只裁掉已压缩的部分
+│   └── profile.py              用户画像，乐观锁更新
+│
+├── observability/
+│   ├── health.py               Z-score 延迟滑窗、权重衰减 / 恢复、从路由池摘除
+│   └── metrics.py              Prometheus 计数 / 直方图 / 仪表
+│
+├── tools/
+│   ├── registry.py             工具注册表：来源、标签、写操作标记、角色白名单
+│   └── search.py               联网搜索
+│
+├── models/__init__.py          11 张 ORM 表（users、api_keys、knowledge_bases、documents……）
+└── static/index.html           单文件聊天页（原生 JS + SSE）
+
+plugins/example_plugin/         示例能力插件（时间 + 计算器）
+tests/                          78 个 pytest 用例 —— Redis / Chroma / 数据库 / LLM 全部换成本地替身
+tools/                          离线评测脚本（意图准确率、记忆 Token 开销）
 ```
 
 ## 扩展

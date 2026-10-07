@@ -138,28 +138,90 @@ See `.env.example` for the full list.
 
 ```
 app/
-├── main.py                 FastAPI entry (lifespan: DB, capabilities, plugins, scheduler)
-├── config.py               All configurable parameters
-├── store.py                Redis / ChromaDB connection singletons
-├── api/                    chat (incl. /chat/stream), system, auth, knowledge, memory, repos, schedules, plugins
-├── core/                   Request context, database, security (JWT / API keys / encryption), auth dependencies, background-task supervision
-├── models/                 ORM: users, knowledge bases, repo connections, schedules, plugin state, ...
-├── services/               Chat orchestration, users, tool policies
+├── main.py                     FastAPI entry; lifespan boot order (config → DB → capabilities → plugins → intent index → recovery loop)
+├── config.py                   Every tunable (pydantic-settings, env / .env)
+├── store.py                    Redis + ChromaDB connection singletons (Chroma has a 30s failure cooldown)
+│
+├── api/                        HTTP layer, one module per resource group
+│   ├── chat.py                 POST /chat, POST /chat/stream (SSE), GET /chat page
+│   ├── system.py               /health, /metrics, /models, /capabilities
+│   ├── auth.py                 Login, JWT, API keys, /users
+│   ├── knowledge.py            Knowledge bases, document upload / search / reindex
+│   ├── memory.py               Memory browsing and search
+│   ├── repos.py                Repo connections, commits, changelog, indexing, write confirmation
+│   ├── schedules.py            Scheduled-task CRUD, cron parsing, run history
+│   └── plugins.py              Plugin list / enable / reload, MCP servers, tool policies
+│
+├── core/                       Platform substrate — no business logic
+│   ├── context.py              RequestContext in contextvars (user, session, model override)
+│   ├── db.py                   SQLAlchemy 2.0 async engine, session_scope
+│   ├── security.py             bcrypt, JWT, API-key hashing, Fernet encryption
+│   ├── deps.py                 get_current_user / require_admin FastAPI dependencies
+│   └── tasks.py                Background-task supervision: spawn() keeps strong refs, drain() on shutdown
+│
+├── services/
+│   ├── chat.py                 The orchestration pipeline: prepare → dispatch → update memory
+│   ├── users.py                Users, login, API keys
+│   └── policies.py             Role → tool allow-list (persisted, loaded at startup)
+│
 ├── llm/
-│   ├── config.py           Runtime LLM config (runtime override > .env)
-│   ├── gateway.py          Unified LLM entry point (chat / embed, single LangChain backend)
-│   └── factory.py          LangChain ChatModel / Embeddings factory
-├── intent/                 Three-way fusion + dynamic intent catalog (catalog.py)
-├── router/                 Agent registry, dispatch & failover (incl. streaming)
-├── agents/                 BaseAgent, LangChainAgent, retrieval, summarization, general, fallback
-├── capabilities/           Built-ins: core / knowledge / memory / web / repo / scheduler
-├── plugins/                Local plugin manager, MCP integration
-├── memory/                 Short-term / long-term / compression / profile
-├── observability/          Anomaly detection & self-healing, Prometheus metrics
-├── tools/                  Tool registry, web search
-└── static/index.html       Chat UI
-plugins/example_plugin/     Example plugin
-tests/                      pytest (all external services replaced by local fakes)
+│   ├── config.py               Runtime config; runtime override beats .env
+│   ├── factory.py              Builds and caches ChatModel / Embeddings per resolved spec
+│   ├── gateway.py              chat() / embed() entry point (single LangChain backend)
+│   └── messages.py             dict ↔ LangChain message conversion
+│
+├── intent/                     Intent recognition
+│   ├── catalog.py              Dynamic catalog: config defaults + intents registered by capabilities/plugins
+│   ├── semantic.py             LLM lane (few-shot; prompt auto-generated once the catalog grows)
+│   ├── vector.py               Embedding-similarity lane (Chroma; rebuilds when the catalog changes)
+│   ├── keyword.py              Keyword-voting lane
+│   └── blend.py                Fusion: cheap-lane short-circuit → weighted vote → reweight on lane failure
+│
+├── router/
+│   ├── pool.py                 Agent registry + intent → agent routes
+│   └── route.py                Dispatch, weighted ordering, failover (incl. streaming)
+│
+├── agents/
+│   ├── base.py                 BaseAgent / AgentContext / AgentResponse
+│   ├── langchain_agent.py      LangChainAgent: tools by tag+role, static system prompt, cached agent graph
+│   ├── knowledge.py            RetrievalAgent — RAG context, chat, summarize fallback
+│   ├── summary.py              SummarizationAgent — no tools, streams
+│   └── safety.py               FallbackAgent — never raises, never calls the LLM
+│
+├── capabilities/               One package per capability; each registers tools + intents + agents + routes
+│   ├── base.py                 Capability interface + CapabilityTool declaration
+│   ├── manager.py              Registration / hot reload; auto-generates <capability>_agent when none is given
+│   ├── core.py                 The four base agents and their routes
+│   ├── knowledge/              loaders (txt/md/pdf/docx/html/code) · service (chunk → embed → retrieve) · tools
+│   ├── memory/                 Memory-search tools + MemoryAgent
+│   ├── web/                    fetch (SSRF-guarded extraction) · tools (search / fetch / save-to-KB)
+│   ├── repo/                   providers (GitHub/GitLab/local git) · service (connections, changelog) · tools
+│   └── scheduler/              cron parsing · APScheduler service · webhook delivery
+│
+├── plugins/
+│   ├── manager.py              Local Python plugins: discovery, manifest, enable/disable, hot reload
+│   └── mcp.py                  MCP servers → tools named mcp_<server>_<tool>
+│
+├── memory/
+│   ├── recent.py               Short-term (Redis, TTL, trim)
+│   ├── archive.py              Long-term summaries (Chroma) + legacy global KB
+│   ├── compress.py             Threshold check → LLM summary → store → trim only what was compressed
+│   └── profile.py              User profile, optimistic-locked updates
+│
+├── observability/
+│   ├── health.py               Z-score latency window, weight decay / recovery, removal from rotation
+│   └── metrics.py              Prometheus counters, histogram, gauge
+│
+├── tools/
+│   ├── registry.py             Tool registry: source, tags, write flag, role allow-list
+│   └── search.py               Web search
+│
+├── models/__init__.py          11 ORM tables (users, api_keys, knowledge_bases, documents, ...)
+└── static/index.html           Single-file chat UI (vanilla JS, SSE)
+
+plugins/example_plugin/         Example capability plugin (time + calculator)
+tests/                          78 pytest cases — Redis / Chroma / DB / LLM all swapped for local fakes
+tools/                          Offline evaluation scripts (intent accuracy, memory token cost)
 ```
 
 ## Extending
