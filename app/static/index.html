@@ -103,17 +103,38 @@
   .side-list::-webkit-scrollbar-thumb { background: #dfe5ee; border-radius: 3px; }
   .side-empty { font-size: 12px; color: var(--faint); padding: 16px 8px; line-height: 1.8; }
   .conv {
-    padding: 9px 11px; border-radius: 9px; cursor: pointer; margin-bottom: 2px;
+    padding: 8px 8px 8px 11px; border-radius: 9px; cursor: pointer; margin-bottom: 2px;
     border: 1px solid transparent; transition: background .13s, border-color .13s;
+    display: flex; align-items: center; gap: 6px;
   }
   .conv:hover { background: var(--bg); }
   .conv.active { background: var(--blue-soft); border-color: var(--blue-line); }
+  .conv.confirming { background: #fef2f2; border-color: #fecaca; }
+  .conv-main { flex: 1; min-width: 0; }
   .conv-title {
     font-size: 12.5px; white-space: nowrap; overflow: hidden;
     text-overflow: ellipsis; margin-bottom: 3px;
   }
   .conv.active .conv-title { color: var(--blue-dark); font-weight: 500; }
-  .conv-sub { font-size: 11px; color: var(--faint); }
+  .conv-sub { font-size: 11px; color: var(--faint); display: flex; align-items: center; gap: 3px; min-height: 17px; }
+  .conv-del {
+    flex-shrink: 0; width: 21px; height: 21px; border-radius: 6px; border: none;
+    background: transparent; color: var(--faint); font-size: 15px; line-height: 1;
+    cursor: pointer; opacity: 0; transition: opacity .13s, background .13s, color .13s;
+  }
+  .conv:hover .conv-del { opacity: 1; }
+  .conv-del:hover { background: #fee2e2; color: var(--err); }
+  /* 触屏设备没有 hover，删除按钮常显 */
+  @media (hover: none) { .conv-del { opacity: 1; } }
+  .del-ask { color: var(--err); }
+  .mini {
+    font: inherit; font-size: 11px; padding: 1px 7px; border-radius: 6px;
+    border: 1px solid var(--line); background: var(--surface); color: var(--muted);
+    cursor: pointer; transition: all .13s;
+  }
+  .mini:hover { border-color: var(--muted); color: var(--text); }
+  .mini.danger { border-color: #fecaca; color: var(--err); background: #fef2f2; }
+  .mini.danger:hover { background: var(--err); border-color: var(--err); color: #fff; }
   .side-foot { border-top: 1px solid var(--line); padding: 12px 15px 14px; }
   .side-label { font-size: 11px; color: var(--faint); display: block; margin-bottom: 5px; line-height: 1.5; }
   .side-input {
@@ -408,8 +429,9 @@ const LS_CURRENT = "synapse_current";
 const LS_USER = "synapse_user";
 const MAX_SESSIONS = 60;
 
-let sessions = [];             // [{id, title, ts}]
+let sessions = [];             // [{id, title, ts, hasSummary}]
 let currentSession = "";
+let pendingDelete = "";        // 正在等待二次确认删除的会话 ID
 let localUserId = localStorage.getItem(LS_USER) || "";
 
 /* ==================== Markdown ==================== */
@@ -677,11 +699,39 @@ function renderSessionList() {
     box.innerHTML = `<div class="side-empty">还没有历史会话。<br>发一条消息就会出现在这里。</div>`;
     return;
   }
-  box.innerHTML = sessions.map((s) => `
-    <div class="conv${s.id === currentSession ? " active" : ""}" data-sid="${escapeHtml(s.id)}">
-      <div class="conv-title">${escapeHtml(s.title || s.id)}</div>
-      <div class="conv-sub">${escapeHtml(fmtTime(s.ts))}</div>
-    </div>`).join("");
+  box.innerHTML = sessions.map((s) => {
+    const confirming = s.id === pendingDelete;
+    const sub = confirming
+      ? `<span class="del-ask">删除这段对话？</span>`
+        + `<button class="mini danger" data-confirm="${escapeHtml(s.id)}">删除</button>`
+        + `<button class="mini" data-cancel="1">取消</button>`
+      : `<span>${escapeHtml(fmtTime(s.ts))}${s.hasSummary ? " · 含长期摘要" : ""}</span>`;
+    return `
+      <div class="conv${s.id === currentSession ? " active" : ""}${confirming ? " confirming" : ""}" data-sid="${escapeHtml(s.id)}">
+        <div class="conv-main">
+          <div class="conv-title">${escapeHtml(s.title || s.id)}</div>
+          <div class="conv-sub">${sub}</div>
+        </div>
+        <button class="conv-del" data-del="${escapeHtml(s.id)}" title="删除这段对话">×</button>
+      </div>`;
+  }).join("");
+}
+
+/* 删除一个会话：服务端清短期记忆 + 该会话的长期摘要，本地同步移除。 */
+async function deleteSession(id) {
+  pendingDelete = "";
+  try {
+    await authFetch("/memories/sessions/" + encodeURIComponent(id) + "?purge=true", { method: "DELETE" });
+  } catch (e) { /* 服务端失败也要保证本地列表一致 */ }
+
+  sessions = sessions.filter((s) => s.id !== id);
+  if (currentSession === id) {
+    newSession();                       // 内部会 save + render
+  } else {
+    saveSessionState();
+    renderSessionList();
+  }
+  toast("已删除该会话");
 }
 
 /* 记录/更新一个会话。title 只在还没有标题时写入，避免覆盖首条消息。 */
@@ -710,11 +760,16 @@ async function syncServerSessions() {
       const ts = (Number(s.updated_at) || 0) * 1000;
       const item = sessions.find((x) => x.id === s.session_id);
       if (!item) {
-        sessions.push({ id: s.session_id, title: (s.preview || "").slice(0, 26) || s.session_id, ts });
+        sessions.push({
+          id: s.session_id,
+          title: (s.preview || "").slice(0, 26) || s.session_id,
+          ts,
+          hasSummary: !!s.has_summary,
+        });
         changed = true;
-      } else if (ts > (item.ts || 0)) {
-        item.ts = ts;
-        changed = true;
+      } else {
+        if (ts > (item.ts || 0)) { item.ts = ts; changed = true; }
+        if (s.has_summary && !item.hasSummary) { item.hasSummary = true; changed = true; }
       }
     }
     if (changed) { sessions.sort((a, b) => b.ts - a.ts); saveSessionState(); }
@@ -978,6 +1033,14 @@ searchToggle.addEventListener("change", () => { webSearchEnabled = searchToggle.
 modelSelect.addEventListener("change", () => switchModel(modelSelect.value));
 document.getElementById("btnNewSession").addEventListener("click", newSession);
 document.getElementById("sessionList").addEventListener("click", (e) => {
+  const del = e.target.closest("[data-del]");
+  if (del) { pendingDelete = del.dataset.del; renderSessionList(); return; }
+
+  const confirmBtn = e.target.closest("[data-confirm]");
+  if (confirmBtn) { deleteSession(confirmBtn.dataset.confirm); return; }
+
+  if (e.target.closest("[data-cancel]")) { pendingDelete = ""; renderSessionList(); return; }
+
   const item = e.target.closest(".conv");
   if (item && item.dataset.sid) selectSession(item.dataset.sid);
 });
