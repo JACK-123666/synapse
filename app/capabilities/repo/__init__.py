@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-from app.agents.base import AgentContext, BaseAgent
-from app.agents.langchain_agent import LangChainAgent, format_recall
+from app.agents.base import BaseAgent
+from app.agents.langchain_agent import LangChainAgent
 from app.capabilities.base import Capability, CapabilityTool, ToolDecl
 from app.capabilities.repo.tools import READ_TOOLS, WRITE_TOOLS
 from app.intent.catalog import IntentSpec
@@ -19,19 +19,13 @@ class RepoAgent(LangChainAgent):
     tool_tags = ("repo", "knowledge")
     max_tokens = 3000
 
-    def build_system_prompt(self, context: AgentContext) -> str:
-        parts: List[str] = [
-            "你是代码仓库助手，可以查看提交记录、Issue、PR/MR、读取代码文件、搜索代码、生成变更日志。",
-            "先用 repo_list 确认有哪些仓库；用户没指定仓库且只有一个时可以直接使用。",
-            "总结 PR / 提交时先读取 diff 再归纳要点；引用代码时注明文件路径。",
-            "创建 Issue、发表评论属于写操作，只会生成待确认操作，务必把操作 ID 告诉用户，由用户确认后执行。",
-        ]
-        recall_text = format_recall(context.long_term_recall)
-        if recall_text:
-            parts.append(f"\n【历史相关摘要】\n{recall_text}")
-        if context.user_profile_context:
-            parts.append(f"\n【用户画像】\n{context.user_profile_context}")
-        return "\n".join(parts)
+    # 静态提示词：记忆召回 / 用户画像由 build_context_block 注入消息序列
+    system_prompt = (
+        "你是代码仓库助手，可以查看提交记录、Issue、PR/MR、读取代码文件、搜索代码、生成变更日志。\n"
+        "先用 repo_list 确认有哪些仓库；用户没指定仓库且只有一个时可以直接使用。\n"
+        "总结 PR / 提交时先读取 diff 再归纳要点；引用代码时注明文件路径。\n"
+        "创建 Issue、发表评论属于写操作，只会生成待确认操作，务必把操作 ID 告诉用户，由用户确认后执行。"
+    )
 
 
 class RepoCapability(Capability):

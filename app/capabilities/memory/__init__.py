@@ -7,8 +7,8 @@ from typing import Any, Dict, List, Tuple
 
 from langchain_core.tools import tool
 
-from app.agents.base import AgentContext, BaseAgent
-from app.agents.langchain_agent import LangChainAgent, format_recall
+from app.agents.base import BaseAgent
+from app.agents.langchain_agent import LangChainAgent
 from app.capabilities.base import Capability, CapabilityTool, ToolDecl
 from app.core.context import get_request_context
 from app.intent.catalog import IntentSpec
@@ -87,18 +87,13 @@ class MemoryAgent(LangChainAgent):
     description = "记忆检索助手"
     tool_tags = ("memory",)
 
-    def build_system_prompt(self, context: AgentContext) -> str:
-        parts: List[str] = [
-            "你负责帮用户回忆历史对话。先调用 memory_search 检索相关摘要，"
-            "需要原始对话时调用 memory_recent_messages；按时间线整理后回答。",
-            "记忆里没有的内容要明确说不记得，不要编造。",
-        ]
-        recall_text = format_recall(context.long_term_recall)
-        if recall_text:
-            parts.append(f"\n【已召回的相关摘要】\n{recall_text}")
-        if context.user_profile_context:
-            parts.append(f"\n【用户画像】\n{context.user_profile_context}")
-        return "\n".join(parts)
+    # 静态提示词。此前这里把记忆召回与用户画像拼进 system prompt，
+    # 导致该 Agent 的图缓存每请求都失效；这些内容现在由 build_context_block 注入消息序列。
+    system_prompt = (
+        "你负责帮用户回忆历史对话。先调用 memory_search 检索相关摘要，"
+        "需要原始对话时调用 memory_recent_messages；按时间线整理后回答。\n"
+        "记忆里没有的内容要明确说不记得，不要编造。"
+    )
 
 
 class MemoryCapability(Capability):

@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.tools import BaseTool
 
-from app.agents.base import AgentContext
 from app.agents.langchain_agent import LangChainAgent, clear_agent_cache
 from app.capabilities.base import Capability, CapabilityTool
 from app.intent.catalog import IntentSpec, get_intent_catalog
@@ -40,10 +39,7 @@ class ToolsetAgent(LangChainAgent):
             "请优先调用可用工具获取真实结果，不要编造；工具出错时如实告知用户。",
         ]
         # 静态提示词：记忆召回 / 用户画像由 build_context_block 注入消息序列
-        self._system_prompt = "\n".join(p for p in parts if p)
-
-    def build_system_prompt(self, context: AgentContext) -> str:
-        return self._system_prompt
+        self.system_prompt = "\n".join(p for p in parts if p)
 
 
 @dataclass

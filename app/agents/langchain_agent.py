@@ -137,6 +137,9 @@ class LangChainAgent(BaseAgent):
 
     #: 工具标签；() 不使用工具，None 使用当前用户可用的全部工具
     tool_tags: Optional[Tuple[str, ...]] = ()
+    #: 系统提示词。必须是静态字符串：一旦掺入每请求都变的内容，
+    #: Agent 图缓存会持续失效并把其他 Agent 的缓存挤出去。
+    system_prompt: str = ""
     #: 是否允许写操作工具
     include_write_tools: bool = True
     temperature: float = 0.5
@@ -151,12 +154,12 @@ class LangChainAgent(BaseAgent):
     def build_system_prompt(self, context: AgentContext) -> str:
         """系统提示词。
 
-        必须只依赖 Agent 自身的静态信息。动态内容（记忆召回、用户画像、
-        检索结果）一律交给 build_context_block 拼进消息序列，这样
-        system_prompt 逐字节稳定，Agent 图缓存与上游 prefix cache 才能命中。
-        context 参数保留是为了子类签名兼容。
+        必须只依赖 Agent 自身的静态信息 —— 子类通过 system_prompt 类属性提供。
+        动态内容（记忆召回、用户画像、检索结果）一律交给 build_context_block
+        拼进消息序列，这样 system_prompt 逐字节稳定，Agent 图缓存与上游
+        prefix cache 才能命中。context 参数保留是为了子类签名兼容。
         """
-        return f"你是 Synapse 智能助手中的「{self.description}」。"
+        return self.system_prompt or f"你是 Synapse 智能助手中的「{self.description}」。"
 
     def select_tools(self, context: AgentContext) -> List[BaseTool]:
         if self.tool_tags is not None and len(self.tool_tags) == 0:
@@ -380,12 +383,9 @@ class GeneralAgent(LangChainAgent):
     description: str = "通用全能助手"
     tool_tags = None
 
-    _SYSTEM_PROMPT = (
+    system_prompt = (
         "你是 Synapse 全能智能助手，可以调用各种工具完成任务：知识库问答、"
         "记忆检索、网页抓取与搜索、代码仓库查询、定时任务管理以及插件提供的扩展能力。\n"
         "需要实时信息或具体数据时优先调用工具，不要编造；工具返回错误时如实告知用户。\n"
         "回答简洁清晰，必要时分点说明。"
     )
-
-    def build_system_prompt(self, context: AgentContext) -> str:
-        return self._SYSTEM_PROMPT
