@@ -17,6 +17,8 @@ pyyaml>=6.0
 
 # ---------- 存储 ----------
 redis==5.0.3
+# 真实 Redis 连不上时，退化为进程内内存实现（REDIS_MODE=auto）
+fakeredis>=2.20
 chromadb==0.4.24
 numpy<2.0
 # chromadb 0.4.24 按旧签名调用 posthog.capture，posthog 6+ 会在每次操作时报错

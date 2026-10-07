@@ -38,8 +38,6 @@ class LongTermMemory:
     def __init__(self, settings: Optional[Settings] = None) -> None:
         self._settings: Settings = settings or get_settings()
         self._collection = None
-        #: 全局知识集合句柄（懒加载 + 缓存）
-        self._knowledge_collection = None
 
     def _get_collection(self):
         """获取或创建 ChromaDB 集合（懒加载）。"""
@@ -55,15 +53,6 @@ class LongTermMemory:
                 self._settings.chroma_collection_summary,
             )
         return self._collection
-
-    def _get_knowledge_collection(self):
-        """获取全局知识集合（懒加载 + 缓存；同步，须在 to_thread 中调用）。"""
-        if self._knowledge_collection is None:
-            self._knowledge_collection = get_chroma().get_or_create_collection(
-                name=self._settings.chroma_collection_knowledge,
-                metadata={"hnsw:space": "cosine"},
-            )
-        return self._knowledge_collection
 
     async def store_summary(
         self,
@@ -233,76 +222,6 @@ class LongTermMemory:
                 "metadata": meta or {},
             })
         return parsed
-
-    async def store_knowledge(
-        self,
-        knowledge_id: str,
-        content: str,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """存储知识库条目（供知识检索 Agent 使用）。
-
-        Args:
-            knowledge_id: 知识条目 ID
-            content: 知识内容文本
-            metadata: 附加元数据
-        """
-        try:
-            llm = get_llm_client()
-            embedding = await llm.embed(content)
-        except LLMError as exc:
-            logger.error("长期记忆: 知识 embedding 失败: %s", exc)
-            raise
-
-        collection = await asyncio.to_thread(self._get_knowledge_collection)
-        await asyncio.to_thread(
-            collection.add,
-            ids=[knowledge_id],
-            embeddings=[embedding],
-            documents=[content],
-            metadatas=[metadata or {}],
-        )
-        logger.info("长期记忆: 知识条目 '%s' 已存储", knowledge_id)
-
-    async def search_knowledge(
-        self,
-        query_text: str,
-        top_k: int = 5,
-    ) -> List[Dict[str, Any]]:
-        """知识库语义检索。
-
-        Args:
-            query_text: 查询文本
-            top_k: 返回 Top-K 条
-
-        Returns:
-            相似知识条目列表
-        """
-        try:
-            llm = get_llm_client()
-            query_embedding = await llm.embed(query_text)
-        except LLMError as exc:
-            logger.error("长期记忆: 知识检索 embedding 失败: %s", exc)
-            return []
-
-        try:
-            collection = await asyncio.to_thread(self._get_knowledge_collection)
-        except Exception as exc:  # noqa: BLE001
-            logger.error("长期记忆: 获取知识库集合失败: %s", exc)
-            return []
-
-        try:
-            results = await asyncio.to_thread(
-                collection.query,
-                query_embeddings=[query_embedding],
-                n_results=top_k,
-                include=["documents", "metadatas", "distances"],
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.error("长期记忆: 知识库检索失败: %s", exc)
-            return []
-
-        return self._parse_results(results)
 
 
 # 全局单例

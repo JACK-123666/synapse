@@ -91,21 +91,31 @@ async def startup() -> None:
     from app.llm.config import get_llm_config
     logger.info("[OK] LLM 配置: %s", get_llm_config().snapshot())
 
-    # 预检 Redis
+    # 预检 Redis（auto 模式下连不上会自动退化为进程内内存实现）
+    from app import store as store_mod
+
     try:
-        from app.store import get_redis
-        redis = await get_redis()
+        redis = await store_mod.get_redis()
         await asyncio.wait_for(redis.ping(), timeout=5)
-        logger.info("[OK] Redis 连接正常")
+        logger.info(
+            "[OK] Redis %s",
+            "退化为进程内内存实现（重启即丢）"
+            if store_mod.redis_is_fallback
+            else "连接正常",
+        )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[SKIP] Redis 不可用: %s", exc)
+        logger.warning("[FAIL] Redis 不可用: %s", exc)
 
     # 预检 ChromaDB（同步客户端，放到线程中执行）
     try:
-        from app.store import get_chroma
-        chroma = await asyncio.to_thread(get_chroma)
+        chroma = await asyncio.to_thread(store_mod.get_chroma)
         await asyncio.to_thread(chroma.heartbeat)
-        logger.info("[OK] ChromaDB 连接正常")
+        logger.info(
+            "[OK] ChromaDB %s",
+            "退化为内嵌持久化模式（data/chroma）"
+            if store_mod.chroma_is_fallback
+            else "连接正常",
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("[SKIP] ChromaDB 不可用: %s", exc)
 

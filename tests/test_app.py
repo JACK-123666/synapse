@@ -30,6 +30,10 @@ async def test_full_app_startup_and_chat(db, fake_redis, chroma, fake_embeddings
 
     monkeypatch.setattr(plugin_module, "_manager", None)
     monkeypatch.setattr(mcp_module, "_manager", None)
+    # 本用例的假模型按调用顺序排队回复，而意图识别的短路会省掉一次 LLM 调用、
+    # 导致队列错位。这里显式关掉短路保持确定性；短路行为本身由
+    # test_platform.py::test_intent_short_circuit_criteria 专项覆盖。
+    monkeypatch.setattr(get_settings(), "intent_short_circuit", False)
     patch_model(_INTENT_JSON, "你好！很高兴见到你", _INTENT_JSON, "流式 你好 呀")
 
     from app.main import app

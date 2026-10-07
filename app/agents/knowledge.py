@@ -18,7 +18,6 @@ from langchain_core.messages import BaseMessage
 
 from app.agents.base import AgentContext
 from app.agents.langchain_agent import LangChainAgent, PreparedRun
-from app.memory.archive import get_long_term_memory
 
 logger = logging.getLogger(__name__)
 
@@ -65,20 +64,14 @@ class RetrievalAgent(LangChainAgent):
         此处兜底处理未路由到 summarize 的情况）。
         """
         intent = context.intent
-        long_term = get_long_term_memory()
 
         # ---- knowledge_retrieval / summarize：检索知识 ----
         knowledge_results: List[Dict[str, Any]] = []
         if intent in ("knowledge_retrieval", "summarize"):
-            try:
-                knowledge_results = await long_term.search_knowledge(
-                    query_text=context.message,
-                    top_k=5,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("检索 Agent: 知识库检索异常: %s", exc)
-
-            # 当前用户可访问的 RAG 知识库
+            # 只查真正的 RAG 知识库（每个库一个 kb_<id> 集合）。
+            # 此前这里还会多查一次遗留的全局 knowledge_base 集合，但它没有任何
+            # 写入入口、永远为空，等于每个知识问题白付一次 embedding + 一次 Chroma 往返。
+            # top_k 不传，由 KnowledgeService 读 RAG_TOP_K 配置。
             try:
                 from app.capabilities.knowledge.service import get_knowledge_service
 

@@ -133,6 +133,31 @@ async def test_vector_index_rebuilds_when_catalog_changes(chroma):
     assert max(scores, key=scores.get) == "repo_management"
 
 
+def test_intent_short_circuit_criteria():
+    """短路判据：两路结论一致、关键词够集中、向量原始相似度够高，缺一不可。"""
+    from app.intent.blend import IntentFusion
+
+    fusion = IntentFusion()
+    ok = fusion._try_short_circuit({"small_talk": 1.0}, {"small_talk": 0.5, "x": 0.5}, 0.9)
+    assert ok is not None, "一致且证据充分时应当短路"
+    assert ok[0] == "small_talk"
+
+    # 两路结论不一致
+    assert fusion._try_short_circuit({"small_talk": 1.0}, {"summarize": 1.0}, 0.9) is None
+    # 关键词命中被打散（消息有歧义）
+    assert fusion._try_short_circuit({"a": 0.5, "b": 0.5}, {"a": 1.0}, 0.9) is None
+    # 向量原始相似度不足：注意此处归一化分布是 1.0 也仍然不能短路——
+    # 这正是曾经让短路永远不触发的缺陷（拿归一化分布当高置信判据）
+    assert fusion._try_short_circuit({"a": 1.0}, {"a": 1.0}, 0.3) is None
+    # 关键回归：向量 top-1 与关键词一致，但归一化分布被摊薄到 0.45（< 0.8 阈值），
+    # 而原始相似度高达 0.8。旧实现拿归一化分布当判据，这里会误判为"不够自信"，
+    # 导致短路永远不触发；现在应当正常短路。
+    assert fusion._try_short_circuit({"a": 1.0}, {"a": 0.45, "b": 0.35, "c": 0.2}, 0.8) is not None
+    # 任一路缺失
+    assert fusion._try_short_circuit(None, {"a": 1.0}, 0.9) is None
+    assert fusion._try_short_circuit({"a": 1.0}, None, 0.9) is None
+
+
 # ---- 能力注册 ----
 
 

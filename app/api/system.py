@@ -47,11 +47,18 @@ async def health() -> HealthResponse:
     """
     modules: Dict[str, Any] = {}
 
+    # 存储后端是否运行在退化实现上（内存 Redis / 内嵌 Chroma）
+    from app import store as store_mod
+
     # Redis
     try:
         redis = await get_redis()
         await redis.ping()
-        modules["redis"] = "connected"
+        modules["redis"] = (
+            "connected (in-memory fallback)"
+            if store_mod.redis_is_fallback
+            else "connected"
+        )
     except Exception as exc:  # noqa: BLE001
         modules["redis"] = f"error: {exc}"
 
@@ -59,7 +66,11 @@ async def health() -> HealthResponse:
     try:
         chroma = await asyncio.to_thread(get_chroma)
         await asyncio.to_thread(chroma.heartbeat)
-        modules["chromadb"] = "connected"
+        modules["chromadb"] = (
+            "connected (embedded fallback)"
+            if store_mod.chroma_is_fallback
+            else "connected"
+        )
     except Exception as exc:  # noqa: BLE001
         modules["chromadb"] = f"error: {exc}"
 
@@ -88,8 +99,9 @@ async def health() -> HealthResponse:
     registry = get_agent_registry()
     modules["agents"] = registry.get_all_health_status()
 
+    # 退化实现也算"可用"：功能正常，只是数据存在本地而非外部服务
     all_ok = all(
-        isinstance(v, str) and v == "connected"
+        isinstance(v, str) and v.startswith("connected")
         for v in [modules.get("redis"), modules.get("chromadb")]
     )
     status = "healthy" if all_ok else "degraded"

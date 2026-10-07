@@ -64,16 +64,20 @@ class IntentFusion:
         """
         # ---- 第一级：关键词 + 向量（本地，无 LLM 成本）----
         vec_raw, kw_raw = await asyncio.gather(
-            self._vector.recognize(message),
+            self._vector.recognize_detailed(message),
             self._keyword.recognize(message),
             return_exceptions=True,
         )
-        vector_result = self._unwrap(vec_raw, "向量")
+        if isinstance(vec_raw, BaseException):
+            vector_result = self._unwrap(vec_raw, "向量")
+            vec_similarity = 0.0
+        else:
+            vector_result, vec_similarity = vec_raw
         keyword_result = self._unwrap(kw_raw, "关键词")
 
         # ---- 短路：两路一致且高置信，跳过 LLM ----
         if self._settings.intent_short_circuit:
-            short = self._try_short_circuit(keyword_result, vector_result)
+            short = self._try_short_circuit(keyword_result, vector_result, vec_similarity)
             if short is not None:
                 intent, confidence = short
                 metrics.record_intent_confidence(intent, confidence)
@@ -108,9 +112,11 @@ class IntentFusion:
         best_intent, confidence = max(fused_scores.items(), key=lambda x: x[1])
         metrics.record_intent_confidence(best_intent, confidence)
         logger.info(
-            "融合意图识别: '%s' -> %s (置信度=%.2f, 三路权重: LLM=%.2f VEC=%.2f KW=%.2f)",
+            "融合意图识别: '%s' -> %s (置信度=%.2f, 三路权重: LLM=%.2f VEC=%.2f KW=%.2f, "
+            "向量原始相似度=%.3f)",
             message[:50], best_intent, confidence,
             weights.get("llm", 0), weights.get("vector", 0), weights.get("keyword", 0),
+            vec_similarity,
         )
         return (best_intent, confidence)
 
@@ -147,12 +153,18 @@ class IntentFusion:
         self,
         keyword_result: Optional[Dict[str, float]],
         vector_result: Optional[Dict[str, float]],
+        vec_top_similarity: float,
     ) -> Optional[Tuple[str, float]]:
-        """关键词与向量两路结论一致且都高置信时，直接判定，跳过 LLM 路。
+        """关键词与向量两路结论一致、且各自证据都够强时，直接判定，跳过 LLM 路。
 
-        只有两路完全同意同一个意图、且各自分数都达到阈值才短路。
-        一旦消息存在歧义（例如同时出现「总结」和「文档」），
-        关键词命中数被摊薄到多个意图上，分数自然落到阈值以下，仍走完整三路融合。
+        两道判据：
+        - 关键词：命中要集中在同一个意图上（归一化分数 >= min_score）；
+        - 向量：最近一条意图示例的**原始余弦相似度** >= min_similarity。
+          这里刻意不用归一化分布：Top-K 横跨多个意图时它会被摊薄，
+          即使语义上极其接近也拿不到高分（实测几乎永远卡在 0.4~0.7）。
+
+        一旦消息有歧义（例如同时出现「总结」和「文档」），关键词命中被摊薄到
+        多个意图上，第一道判据自然不通过，仍会走完整三路融合。
         """
         if not keyword_result or not vector_result:
             return None
@@ -162,16 +174,16 @@ class IntentFusion:
         if kw_top != vec_top:
             return None
 
-        min_score = self._settings.intent_short_circuit_min_score
-        confidence = min(keyword_result[kw_top], vector_result[vec_top])
-        if confidence < min_score:
+        if keyword_result[kw_top] < self._settings.intent_short_circuit_min_score:
+            return None
+        if vec_top_similarity < self._settings.intent_short_circuit_min_similarity:
             return None
 
         # 用「LLM 路缺席」的权重重分配结果折算，口径与完整路径一致
         weights = self._compute_weights(False, True, True)
         fused = (
             keyword_result[kw_top] * weights["keyword"]
-            + vector_result[vec_top] * weights["vector"]
+            + vec_top_similarity * weights["vector"]
         )
         return kw_top, fused
 

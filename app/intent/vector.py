@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.config import Settings, get_settings
 from app.intent.catalog import IntentCatalog, get_intent_catalog
@@ -146,8 +146,21 @@ class VectorIntentRecognizer:
         Returns:
             {意图标签: 相似度分数} 字典，识别失败返回 None
         """
+        scores, _ = await self.recognize_detailed(message)
+        return scores
+
+    async def recognize_detailed(
+        self, message: str
+    ) -> Tuple[Optional[Dict[str, float]], float]:
+        """返回 (归一化分数分布, 最近一条示例的原始余弦相似度)。
+
+        为什么要同时返回原始相似度：归一化分布是"Top-K 里各意图各占多少"，
+        Top-K 横跨多个意图时会被摊薄——即使语义上极其接近，也拿不到高分，
+        因此它不适合当"高置信"的判据。原始相似度才反映"到底有多接近"，
+        供融合器的短路判断使用。
+        """
         if not message.strip():
-            return None
+            return None, 0.0
 
         if not self._initialized:
             await self.initialize()
@@ -167,9 +180,11 @@ class VectorIntentRecognizer:
             logger.error("向量意图识别: ChromaDB 查询失败: %s", exc)
             # 句柄可能已失效（集合被重建 / 服务重启），下次调用重新获取
             self._collection = None
-            return None
+            return None, 0.0
 
-        return self._parse_results(results)
+        distances = (results.get("distances") or [[]])[0]
+        top_similarity = max(0.0, 1.0 - float(distances[0])) if distances else 0.0
+        return self._parse_results(results), top_similarity
 
     def _parse_results(self, results: Dict) -> Optional[Dict[str, float]]:
         """解析 ChromaDB 查询结果，汇总各意图的相似度分数。

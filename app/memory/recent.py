@@ -152,6 +152,37 @@ class ShortTermMemory:
         await redis.ltrim(key, count, -1)
         logger.info("短期记忆: session=%s 已移除最早的 %d 条消息", session_id, count)
 
+    async def list_sessions(self, limit: int = 200) -> List[Dict[str, Any]]:
+        """列出当前还活着的会话（扫描短期记忆的 key）。
+
+        供前端展示历史会话列表：每条取最后一条消息的时间戳用于排序，
+        并截取一小段作为预览。会话数一般不多，因此直接逐个读尾元素。
+        """
+        redis = await self._get_redis()
+        prefix = f"{_SHORT_TERM_PREFIX}:"
+        sessions: List[Dict[str, Any]] = []
+        async for key in redis.scan_iter(match=f"{prefix}*", count=100):
+            session_id = key[len(prefix):]
+            if not session_id:
+                continue
+            tail = await redis.lrange(key, -1, -1)
+            updated_at, preview = 0.0, ""
+            if tail:
+                try:
+                    last = json.loads(tail[0])
+                    updated_at = float(last.get("timestamp") or 0.0)
+                    preview = str(last.get("content") or "")[:80]
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    pass
+            sessions.append({
+                "session_id": session_id,
+                "message_count": int(await redis.llen(key)),
+                "updated_at": updated_at,
+                "preview": preview,
+            })
+        sessions.sort(key=lambda s: s["updated_at"], reverse=True)
+        return sessions[:limit]
+
 
 # 全局单例
 

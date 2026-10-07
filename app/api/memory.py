@@ -58,6 +58,61 @@ async def delete_memory(
     return {"ok": True}
 
 
+@router.get("/sessions", summary="列出会话（历史对话）")
+async def list_sessions(
+    limit: int = Query(50, ge=1, le=200),
+    user: CurrentUser = Depends(get_current_user),
+) -> List[Dict[str, Any]]:
+    """按最近活跃倒序列出会话，供前端渲染历史对话列表。
+
+    合并两个来源，缺一不可：
+    - 短期记忆里还活着的会话 —— 有完整消息，可以直接恢复对话；
+    - 只剩长期摘要的会话 —— 短期已过期（TTL 24h）或服务重启过，
+      但压缩出来的摘要还在，仍应出现在列表里。
+    """
+    settings = get_settings()
+    prefix = f"{user.id}:" if settings.auth_enabled else ""
+
+    def strip(sid: str) -> str:
+        """去掉开启鉴权时加上的用户前缀，返回前端使用的原始会话 ID。"""
+        return sid[len(prefix):] if prefix and sid.startswith(prefix) else sid
+
+    sessions: Dict[str, Dict[str, Any]] = {}
+
+    for item in await get_short_term_memory().list_sessions(limit=200):
+        raw_sid = item["session_id"]
+        if prefix and not raw_sid.startswith(prefix):
+            continue
+        item["session_id"] = strip(raw_sid)
+        item["has_summary"] = False
+        sessions[item["session_id"]] = item
+
+    for summary in await get_long_term_memory().list_summaries(
+        user_id=user.id if settings.auth_enabled else None, limit=200
+    ):
+        meta = summary.get("metadata") or {}
+        raw_sid = meta.get("session_id")
+        if not raw_sid:
+            continue
+        sid = strip(raw_sid)
+        ts = float(meta.get("timestamp") or 0)
+        entry = sessions.get(sid)
+        if entry is None:
+            sessions[sid] = {
+                "session_id": sid,
+                "message_count": 0,
+                "updated_at": ts,
+                "preview": str(summary.get("text") or "")[:80],
+                "has_summary": True,
+            }
+        else:
+            entry["has_summary"] = True
+            entry["updated_at"] = max(float(entry.get("updated_at") or 0), ts)
+
+    ordered = sorted(sessions.values(), key=lambda s: s.get("updated_at") or 0, reverse=True)
+    return ordered[:limit]
+
+
 @router.get("/sessions/{session_id}", summary="查看会话短期记忆")
 async def get_session(
     session_id: str,

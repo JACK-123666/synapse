@@ -42,10 +42,21 @@ class Settings(BaseSettings):
         default="redis://redis:6379/0",
         description="Redis 连接 URL，用于短期记忆与用户画像缓存",
     )
+    redis_mode: str = Field(
+        default="auto",
+        description="Redis 后端：auto（连不上自动退化为进程内内存实现）/ "
+        "server（必须连真实服务）/ memory（强制内存，重启即丢）",
+    )
+    redis_connect_timeout: float = Field(default=3.0, description="Redis 连接超时（秒）")
 
     # ChromaDB 配置
     chroma_host: str = Field(default="chromadb", description="ChromaDB 服务主机")
     chroma_port: int = Field(default=8000, description="ChromaDB 服务端口")
+    chroma_mode: str = Field(
+        default="auto",
+        description="ChromaDB 后端：auto（服务不可用时退化为内嵌持久化）/ "
+        "server（必须连真实服务）/ embedded（直接用本地文件，无需服务端）",
+    )
 
     # ChromaDB 集合名
     chroma_collection_intents: str = Field(
@@ -54,12 +65,9 @@ class Settings(BaseSettings):
     chroma_collection_summary: str = Field(
         default="session_summaries", description="会话摘要长期记忆集合"
     )
-    chroma_collection_knowledge: str = Field(
-        default="knowledge_base", description="知识库向量集合"
-    )
-    chroma_collection_profile: str = Field(
-        default="user_profiles", description="用户画像向量集合"
-    )
+    # 注：RAG 知识库每个库一个集合，名为 kb_<知识库ID>，由 KnowledgeService 动态生成，
+    # 因此这里没有对应的固定集合名（历史上有过一个全局 knowledge_base 集合，已移除）。
+    # 用户画像存在 Redis，也没有对应的向量集合。
 
     # LLM 配置
     llm_provider: str = Field(
@@ -183,7 +191,11 @@ class Settings(BaseSettings):
         description="关键词与向量两路结论一致且高置信时跳过 LLM 路，省掉一次 LLM 往返",
     )
     intent_short_circuit_min_score: float = Field(
-        default=0.8, description="短路所需的单路最低归一化分数"
+        default=0.8, description="短路所需的关键词路最低归一化分数"
+    )
+    intent_short_circuit_min_similarity: float = Field(
+        default=0.6,
+        description="短路所需的向量路原始余弦相似度下限（最近一条意图示例）",
     )
 
     # 记忆管理
