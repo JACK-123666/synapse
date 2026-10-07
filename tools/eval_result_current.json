@@ -1,0 +1,1126 @@
+{
+  "meta": {
+    "settings": {
+      "provider": "deepseek",
+      "weights": {
+        "llm": 0.5,
+        "vector": 0.3,
+        "keyword": 0.2
+      },
+      "llm_path_used": true
+    },
+    "testset": {
+      "n": 100,
+      "hard_n": 23
+    },
+    "path_available": {
+      "llm": true,
+      "vector": true,
+      "keyword": false
+    }
+  },
+  "per_path": {
+    "llm": {
+      "available": true,
+      "n": 100,
+      "acc": 0.96,
+      "correct": 96,
+      "hard_n": 23,
+      "hard_acc": 0.8696,
+      "hard_correct": 20
+    },
+    "vector": {
+      "available": true,
+      "n": 100,
+      "acc": 0.66,
+      "correct": 66,
+      "hard_n": 23,
+      "hard_acc": 0.6522,
+      "hard_correct": 15
+    },
+    "keyword": {
+      "available": true,
+      "n": 62,
+      "acc": 0.9516,
+      "correct": 59,
+      "hard_n": 10,
+      "hard_acc": 0.9,
+      "hard_correct": 9
+    }
+  },
+  "fusion": {
+    "三路融合(基准)": {
+      "acc": 0.97,
+      "correct": 97,
+      "n": 100
+    },
+    "仅语义+关键词(向量故障)": {
+      "acc": 0.96,
+      "correct": 96,
+      "n": 100
+    },
+    "仅语义+向量(关键词故障)": {
+      "acc": 0.97,
+      "correct": 97,
+      "n": 100
+    },
+    "仅向量+关键词(LLM故障)": {
+      "acc": 0.83,
+      "correct": 83,
+      "n": 100
+    },
+    "仅关键词(双路故障)": {
+      "acc": 0.8,
+      "correct": 80,
+      "n": 100
+    }
+  },
+  "confusion_matrix": {
+    "knowledge_retrieval": {
+      "knowledge_retrieval": 41,
+      "summarize": 0,
+      "small_talk": 0
+    },
+    "summarize": {
+      "knowledge_retrieval": 0,
+      "summarize": 27,
+      "small_talk": 0
+    },
+    "small_talk": {
+      "knowledge_retrieval": 3,
+      "summarize": 0,
+      "small_talk": 29
+    }
+  },
+  "per_intent": {
+    "knowledge_retrieval": {
+      "n": 41,
+      "acc": 1.0
+    },
+    "summarize": {
+      "n": 27,
+      "acc": 1.0
+    },
+    "small_talk": {
+      "n": 32,
+      "acc": 0.9062
+    }
+  },
+  "hard_subset": {
+    "n": 23,
+    "correct": 21,
+    "acc": 0.913
+  },
+  "clean_subset": {
+    "n": 71,
+    "leaked_n": 29,
+    "correct": 69,
+    "acc": 0.9718
+  },
+  "latency_pure_fusion_ms": {
+    "avg_ms": 0.018,
+    "p95_ms": 0.021
+  },
+  "per_item": [
+    {
+      "text": "什么是向量数据库？",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": true,
+      "llm": "knowledge_retrieval",
+      "vector": "small_talk",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "解释一下RAG是什么",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "summarize",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "Redis和MySQL有什么区别？",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "summarize",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "帮我查一下多Agent架构的原理",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": true,
+      "llm": "knowledge_retrieval",
+      "vector": "summarize",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "什么是LoRA微调？",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "small_talk",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "Docker和Kubernetes的区别",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "summarize",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "如何部署FastAPI服务？",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "knowledge_retrieval",
+      "keyword": null,
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "帮我找关于机器学习的资料",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "knowledge_retrieval",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "检索一下相关的技术文档",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "knowledge_retrieval",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "什么是Transformer架构？",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "knowledge_retrieval",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "了解prompt工程的基本概念",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "summarize",
+      "keyword": null,
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "what is a vector database?",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "summarize",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "How does authentication work in this system?",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": true,
+      "llm": "knowledge_retrieval",
+      "vector": "knowledge_retrieval",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "what is the difference between Redis and Memcached",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "knowledge_retrieval",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "explain chain of thought prompting",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": true,
+      "llm": "knowledge_retrieval",
+      "vector": "knowledge_retrieval",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "这个技术方案是什么意思？",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": true,
+      "llm": "knowledge_retrieval",
+      "vector": "knowledge_retrieval",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "查一下最新的AI新闻",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "summarize",
+      "keyword": null,
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "我想了解嵌入式系统",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "summarize",
+      "keyword": null,
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "讲解一下NLP的发展历程",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "summarize",
+      "keyword": null,
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "什么是大语言模型？",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "knowledge_retrieval",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "那个东西的原理是什么？",
+      "gold": "knowledge_retrieval",
+      "hard": true,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "summarize",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "这个功能怎么用？",
+      "gold": "knowledge_retrieval",
+      "hard": true,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "我上次看的那篇文章在讲什么来着？",
+      "gold": "knowledge_retrieval",
+      "hard": true,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "knowledge_retrieval",
+      "keyword": null,
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "有没有关于这个话题的资料？",
+      "gold": "knowledge_retrieval",
+      "hard": true,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "knowledge_retrieval",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "能再讲详细一点吗？",
+      "gold": "knowledge_retrieval",
+      "hard": true,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "summarize",
+      "keyword": null,
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "解释下为什么需要Rerank",
+      "gold": "knowledge_retrieval",
+      "hard": true,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "summarize",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "how does that work?",
+      "gold": "knowledge_retrieval",
+      "hard": true,
+      "leaked": true,
+      "llm": "knowledge_retrieval",
+      "vector": "knowledge_retrieval",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "can you explain that concept to me?",
+      "gold": "knowledge_retrieval",
+      "hard": true,
+      "leaked": true,
+      "llm": "knowledge_retrieval",
+      "vector": "summarize",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "请介绍一下这个项目",
+      "gold": "knowledge_retrieval",
+      "hard": true,
+      "leaked": true,
+      "llm": "knowledge_retrieval",
+      "vector": "summarize",
+      "keyword": null,
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "我想知道这个系统的架构是怎么设计的",
+      "gold": "knowledge_retrieval",
+      "hard": true,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "knowledge_retrieval",
+      "keyword": null,
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "帮我总结一下这段对话",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": true,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "把这篇文档压缩成摘要",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": true,
+      "llm": "summarize",
+      "vector": "knowledge_retrieval",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "概括一下会议要点",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": true,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "总结一下这篇文章的主要内容",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": true,
+      "llm": "summarize",
+      "vector": "knowledge_retrieval",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "提炼一下重点",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": false,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "简要概括",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": false,
+      "llm": "summarize",
+      "vector": "small_talk",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "归纳一下这几个观点",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": true,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "帮我写个摘要",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": false,
+      "llm": "summarize",
+      "vector": "small_talk",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "这段文字讲了什么，简短说",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": false,
+      "llm": "summarize",
+      "vector": "knowledge_retrieval",
+      "keyword": null,
+      "fusion": "summarize"
+    },
+    {
+      "text": "summarize the key points of this article",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": true,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "give me a brief summary of the document",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": true,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "can you condense this text?",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": true,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": "small_talk",
+      "fusion": "summarize"
+    },
+    {
+      "text": "把聊天记录整理成要点",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": false,
+      "llm": "summarize",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "summarize"
+    },
+    {
+      "text": "帮我总结PDF内容",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": true,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "总结一下市场报告",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": true,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "太长了我没时间看，帮我概括一下",
+      "gold": "summarize",
+      "hard": true,
+      "leaked": false,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "说了这么多，中心思想是什么？",
+      "gold": "summarize",
+      "hard": true,
+      "leaked": false,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": "knowledge_retrieval",
+      "fusion": "summarize"
+    },
+    {
+      "text": "用三句话概括",
+      "gold": "summarize",
+      "hard": true,
+      "leaked": false,
+      "llm": "summarize",
+      "vector": "small_talk",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "帮我提炼核心观点",
+      "gold": "summarize",
+      "hard": true,
+      "leaked": false,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "这段内容信息量太大，压缩一下",
+      "gold": "summarize",
+      "hard": true,
+      "leaked": true,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "你好",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": true,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": "small_talk",
+      "fusion": "small_talk"
+    },
+    {
+      "text": "嗨",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": "small_talk",
+      "fusion": "small_talk"
+    },
+    {
+      "text": "谢谢",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": true,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": "small_talk",
+      "fusion": "small_talk"
+    },
+    {
+      "text": "再见",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": "small_talk",
+      "fusion": "small_talk"
+    },
+    {
+      "text": "早上好",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": "small_talk",
+      "fusion": "small_talk"
+    },
+    {
+      "text": "今天天气怎么样",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": true,
+      "llm": "knowledge_retrieval",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "你是谁",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "small_talk"
+    },
+    {
+      "text": "哈哈",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "small_talk"
+    },
+    {
+      "text": "好的",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "summarize",
+      "keyword": null,
+      "fusion": "small_talk"
+    },
+    {
+      "text": "辛苦了",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "small_talk"
+    },
+    {
+      "text": "hello",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": "small_talk",
+      "fusion": "small_talk"
+    },
+    {
+      "text": "hi there",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": "small_talk",
+      "fusion": "small_talk"
+    },
+    {
+      "text": "thanks a lot",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "summarize",
+      "keyword": "small_talk",
+      "fusion": "small_talk"
+    },
+    {
+      "text": "how are you",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": true,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": "knowledge_retrieval",
+      "fusion": "small_talk"
+    },
+    {
+      "text": "拜拜",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "small_talk"
+    },
+    {
+      "text": "晚上好",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": "small_talk",
+      "fusion": "small_talk"
+    },
+    {
+      "text": "你叫什么名字",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "small_talk"
+    },
+    {
+      "text": "在吗",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "small_talk"
+    },
+    {
+      "text": "然后呢？",
+      "gold": "small_talk",
+      "hard": true,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "small_talk"
+    },
+    {
+      "text": "继续",
+      "gold": "small_talk",
+      "hard": true,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "说说看",
+      "gold": "small_talk",
+      "hard": true,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "哦是吗",
+      "gold": "small_talk",
+      "hard": true,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "small_talk"
+    },
+    {
+      "text": "就这样吧",
+      "gold": "small_talk",
+      "hard": true,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "small_talk"
+    },
+    {
+      "text": "你在干嘛",
+      "gold": "small_talk",
+      "hard": true,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "small_talk"
+    },
+    {
+      "text": "真不错",
+      "gold": "small_talk",
+      "hard": true,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "summarize",
+      "keyword": null,
+      "fusion": "small_talk"
+    },
+    {
+      "text": "有意思",
+      "gold": "small_talk",
+      "hard": true,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "small_talk"
+    },
+    {
+      "text": "什么是检索增强生成",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "knowledge_retrieval",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "帮我查一下prompt里temperature参数",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": true,
+      "llm": "knowledge_retrieval",
+      "vector": "summarize",
+      "keyword": null,
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "ChromaDB和Milvus怎么选",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "knowledge_retrieval",
+      "keyword": null,
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "解释一下attention机制",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": true,
+      "llm": "knowledge_retrieval",
+      "vector": "summarize",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "了解了解微调的原理",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "summarize",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "介绍一下Redis的持久化方式",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "knowledge_retrieval",
+      "keyword": null,
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "SQL和NoSQL的区别",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "summarize",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "什么是余弦相似度",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "knowledge_retrieval",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "帮我找找相关的论文",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "knowledge_retrieval",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "什么是多模态模型",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "small_talk",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "解释一下Z-score异常检测",
+      "gold": "knowledge_retrieval",
+      "hard": false,
+      "leaked": false,
+      "llm": "knowledge_retrieval",
+      "vector": "summarize",
+      "keyword": "knowledge_retrieval",
+      "fusion": "knowledge_retrieval"
+    },
+    {
+      "text": "帮我概括这段代码的作用",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": false,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "简述一下会议纪要",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": true,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "把这份报告浓缩成一段话",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": false,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": null,
+      "fusion": "summarize"
+    },
+    {
+      "text": "归纳总结我的需求",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": false,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "简短总结一下背景",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": true,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "帮我整理一下读书笔记要点",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": false,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": null,
+      "fusion": "summarize"
+    },
+    {
+      "text": "总结一下这周的进度",
+      "gold": "summarize",
+      "hard": false,
+      "leaked": true,
+      "llm": "summarize",
+      "vector": "summarize",
+      "keyword": "summarize",
+      "fusion": "summarize"
+    },
+    {
+      "text": "哈喽",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "small_talk"
+    },
+    {
+      "text": "谢谢你的帮助",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": true,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": "small_talk",
+      "fusion": "small_talk"
+    },
+    {
+      "text": "太棒了",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "summarize",
+      "keyword": null,
+      "fusion": "small_talk"
+    },
+    {
+      "text": "嗯嗯",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "small_talk"
+    },
+    {
+      "text": "晚安",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "small_talk"
+    },
+    {
+      "text": "哈哈好的",
+      "gold": "small_talk",
+      "hard": false,
+      "leaked": false,
+      "llm": "small_talk",
+      "vector": "small_talk",
+      "keyword": null,
+      "fusion": "small_talk"
+    }
+  ]
+}

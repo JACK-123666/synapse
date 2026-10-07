@@ -1,0 +1,208 @@
+{
+  "meta": {
+    "rounds": 20,
+    "config": {
+      "short_term_max_rounds": 10,
+      "summary_trigger_rounds": 8,
+      "token_budget": 4000,
+      "long_term_recall_k": 3
+    },
+    "token_estimator": "系统内置 _estimate_tokens（中文≈1.5字符/token，英文≈0.75 token/词）",
+    "assumptions": [
+      "短期记忆用内存版 Redis 模拟（真实 LTRIM 窗口逻辑）",
+      "摘要用固定长度 stub（≤200 字约束，实际 LLM 摘要 150-250 字）",
+      "长期记忆 embedding 用确定性 mock 向量（不影响文本长度）",
+      "会话未启用用户画像（user_id=None，profile 上下文为 0）"
+    ]
+  },
+  "totals": {
+    "baseline": 14006,
+    "synapse": 6030,
+    "reduction": 0.5695,
+    "peak_baseline": 1399,
+    "peak_synapse": 579,
+    "peak_reduction": 0.5861
+  },
+  "per_turn": [
+    {
+      "turn": 1,
+      "rounds_stored": 1,
+      "baseline_tokens": 0,
+      "synapse_tokens": 0,
+      "short_msgs": 0,
+      "recall_msgs": 0,
+      "compressed": false
+    },
+    {
+      "turn": 2,
+      "rounds_stored": 2,
+      "baseline_tokens": 51,
+      "synapse_tokens": 51,
+      "short_msgs": 2,
+      "recall_msgs": 0,
+      "compressed": false
+    },
+    {
+      "turn": 3,
+      "rounds_stored": 3,
+      "baseline_tokens": 140,
+      "synapse_tokens": 140,
+      "short_msgs": 4,
+      "recall_msgs": 0,
+      "compressed": false
+    },
+    {
+      "turn": 4,
+      "rounds_stored": 4,
+      "baseline_tokens": 231,
+      "synapse_tokens": 231,
+      "short_msgs": 6,
+      "recall_msgs": 0,
+      "compressed": false
+    },
+    {
+      "turn": 5,
+      "rounds_stored": 5,
+      "baseline_tokens": 320,
+      "synapse_tokens": 320,
+      "short_msgs": 8,
+      "recall_msgs": 0,
+      "compressed": false
+    },
+    {
+      "turn": 6,
+      "rounds_stored": 6,
+      "baseline_tokens": 374,
+      "synapse_tokens": 374,
+      "short_msgs": 10,
+      "recall_msgs": 0,
+      "compressed": false
+    },
+    {
+      "turn": 7,
+      "rounds_stored": 7,
+      "baseline_tokens": 431,
+      "synapse_tokens": 431,
+      "short_msgs": 12,
+      "recall_msgs": 0,
+      "compressed": false
+    },
+    {
+      "turn": 8,
+      "rounds_stored": 8,
+      "baseline_tokens": 520,
+      "synapse_tokens": 520,
+      "short_msgs": 14,
+      "recall_msgs": 0,
+      "compressed": true
+    },
+    {
+      "turn": 9,
+      "rounds_stored": 9,
+      "baseline_tokens": 607,
+      "synapse_tokens": 94,
+      "short_msgs": 0,
+      "recall_msgs": 1,
+      "compressed": false
+    },
+    {
+      "turn": 10,
+      "rounds_stored": 10,
+      "baseline_tokens": 696,
+      "synapse_tokens": 183,
+      "short_msgs": 2,
+      "recall_msgs": 1,
+      "compressed": false
+    },
+    {
+      "turn": 11,
+      "rounds_stored": 11,
+      "baseline_tokens": 749,
+      "synapse_tokens": 236,
+      "short_msgs": 4,
+      "recall_msgs": 1,
+      "compressed": false
+    },
+    {
+      "turn": 12,
+      "rounds_stored": 12,
+      "baseline_tokens": 803,
+      "synapse_tokens": 290,
+      "short_msgs": 6,
+      "recall_msgs": 1,
+      "compressed": false
+    },
+    {
+      "turn": 13,
+      "rounds_stored": 13,
+      "baseline_tokens": 895,
+      "synapse_tokens": 382,
+      "short_msgs": 8,
+      "recall_msgs": 1,
+      "compressed": false
+    },
+    {
+      "turn": 14,
+      "rounds_stored": 14,
+      "baseline_tokens": 948,
+      "synapse_tokens": 435,
+      "short_msgs": 10,
+      "recall_msgs": 1,
+      "compressed": false
+    },
+    {
+      "turn": 15,
+      "rounds_stored": 15,
+      "baseline_tokens": 1038,
+      "synapse_tokens": 525,
+      "short_msgs": 12,
+      "recall_msgs": 1,
+      "compressed": false
+    },
+    {
+      "turn": 16,
+      "rounds_stored": 16,
+      "baseline_tokens": 1092,
+      "synapse_tokens": 579,
+      "short_msgs": 14,
+      "recall_msgs": 1,
+      "compressed": true
+    },
+    {
+      "turn": 17,
+      "rounds_stored": 17,
+      "baseline_tokens": 1157,
+      "synapse_tokens": 189,
+      "short_msgs": 0,
+      "recall_msgs": 2,
+      "compressed": false
+    },
+    {
+      "turn": 18,
+      "rounds_stored": 18,
+      "baseline_tokens": 1245,
+      "synapse_tokens": 277,
+      "short_msgs": 2,
+      "recall_msgs": 2,
+      "compressed": false
+    },
+    {
+      "turn": 19,
+      "rounds_stored": 19,
+      "baseline_tokens": 1310,
+      "synapse_tokens": 342,
+      "short_msgs": 4,
+      "recall_msgs": 2,
+      "compressed": false
+    },
+    {
+      "turn": 20,
+      "rounds_stored": 20,
+      "baseline_tokens": 1399,
+      "synapse_tokens": 431,
+      "short_msgs": 6,
+      "recall_msgs": 2,
+      "compressed": false
+    }
+  ]
+}
