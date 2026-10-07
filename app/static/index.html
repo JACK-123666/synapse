@@ -136,13 +136,33 @@
   .mini.danger { border-color: #fecaca; color: var(--err); background: #fef2f2; }
   .mini.danger:hover { background: var(--err); border-color: var(--err); color: #fff; }
   .side-foot { border-top: 1px solid var(--line); padding: 12px 15px 14px; }
-  .side-label { font-size: 11px; color: var(--faint); display: block; margin-bottom: 5px; line-height: 1.5; }
   .side-input {
     width: 100%; font: inherit; font-size: 12px; color: var(--text);
     background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
     padding: 6px 10px; outline: none; transition: border-color .15s, box-shadow .15s;
   }
   .side-input:focus { border-color: var(--blue); box-shadow: var(--ring); background: var(--surface); }
+  .prof-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .prof-title { font-size: 12px; font-weight: 600; }
+  .prof-body { display: flex; flex-direction: column; gap: 6px; margin-bottom: 9px; }
+  .prof-row { display: flex; gap: 7px; font-size: 11px; line-height: 1.7; }
+  .prof-k { color: var(--faint); flex-shrink: 0; width: 40px; }
+  .prof-v { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .prof-empty { color: var(--faint); font-size: 11px; }
+  .ptag {
+    display: inline-flex; align-items: center; gap: 4px; padding: 0 6px;
+    background: var(--blue-soft); border: 1px solid var(--blue-line); color: var(--blue-dark);
+    border-radius: 20px; font-size: 10.5px; line-height: 17px; max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ptag.plain { background: var(--bg); border-color: var(--line); color: var(--muted); }
+  .ptag i { font-style: normal; opacity: .5; cursor: pointer; }
+  .ptag i:hover { opacity: 1; color: var(--err); }
+  .ptag.plain i { cursor: default; }
+  .ptag.plain i:hover { color: var(--muted); }
+  .prof-add { display: flex; gap: 5px; align-items: center; }
+  .prof-add .side-input { flex: 1; min-width: 0; }
+  .prof-id { font-size: 10px; color: var(--faint); margin-top: 8px; line-height: 1.5; word-break: break-all; }
   .side-toggle {
     display: none; font: inherit; font-size: 16px; color: var(--muted);
     background: none; border: none; cursor: pointer; padding: 0 3px;
@@ -344,8 +364,16 @@
     </div>
     <div class="side-list" id="sessionList"></div>
     <div class="side-foot">
-      <label class="side-label" for="userId">用户标识 —— 用于记忆与画像，留空则不记录画像</label>
-      <input class="side-input" id="userId" placeholder="例如 alice">
+      <div class="prof-head">
+        <span class="prof-title">用户画像</span>
+        <button class="mini" id="btnProfileClear" title="清除全部画像">清除</button>
+      </div>
+      <div class="prof-body" id="profileBody"></div>
+      <div class="prof-add">
+        <input class="side-input" id="prefInput" placeholder="添加偏好，如「用中文回答」">
+        <button class="mini" id="btnPrefAdd">加</button>
+      </div>
+      <div class="prof-id" id="profileId"></div>
     </div>
   </aside>
   <div class="scrim" id="scrim"></div>
@@ -596,10 +624,11 @@ function logout() {
     else document.getElementById("logoutLink").style.display = "";
   }
   loadSessionState();
-  document.getElementById("userId").value = localUserId;
+  ensureUserId();
   if (!currentSession) currentSession = "sess-" + Date.now().toString(36);
   renderSessionList();
   loadModels();
+  loadProfile();
 
   // 有历史就恢复最近一次会话，否则显示欢迎页
   if (sessions.some((s) => s.id === currentSession)) await selectSession(currentSession);
@@ -820,6 +849,102 @@ function closeSidebar() {
   document.getElementById("scrim").classList.remove("show");
 }
 
+/* ==================== 用户画像 ====================
+   画像按"用户"归属、跨会话累积，与会话记忆分工明确：
+     会话记忆回答"我们刚才聊了什么"，画像回答"你是谁、习惯怎样"。
+   无鉴权部署下没有登录用户，因此本地自动生成一个稳定标识并一直携带。
+   画像内容直接显示在侧边栏，避免它变成一个看不见效果的黑盒。 */
+function ensureUserId() {
+  if (!localUserId) {
+    localUserId = "local-" + Math.random().toString(36).slice(2, 8);
+    localStorage.setItem(LS_USER, localUserId);
+  }
+}
+
+function profileUrl() {
+  return "/memories/profile?user_id=" + encodeURIComponent(localUserId);
+}
+
+async function loadProfile() {
+  const body = document.getElementById("profileBody");
+  if (!body) return;
+  document.getElementById("profileId").textContent =
+    "标识 " + localUserId + " · 本地自动生成，跨会话累积";
+  try {
+    const res = await authFetch(profileUrl());
+    if (!res.ok) { body.innerHTML = `<span class="prof-empty">读取失败</span>`; return; }
+    renderProfile(await res.json());
+  } catch (e) {
+    body.innerHTML = `<span class="prof-empty">读取失败</span>`;
+  }
+}
+
+function renderProfile(p) {
+  const body = document.getElementById("profileBody");
+  const prefs = p.preferences || [];
+  const counts = p.frequent_terms || {};
+  // 只展示达到注入门槛（出现 >= 2 次）的术语，和实际进 prompt 的内容保持一致
+  const terms = Object.entries(counts)
+    .filter(([, c]) => Number(c) >= 2)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6);
+
+  const prefHtml = prefs.length
+    ? prefs.map((x) => `<span class="ptag">${escapeHtml(x)}<i data-unpref="${escapeHtml(x)}" title="移除">×</i></span>`).join("")
+    : `<span class="prof-empty">未设置</span>`;
+  const termHtml = terms.length
+    ? terms.map(([t, c]) => `<span class="ptag plain">${escapeHtml(t)}<i>${c}</i></span>`).join("")
+    : `<span class="prof-empty">多聊几轮后自动积累</span>`;
+
+  body.innerHTML =
+    `<div class="prof-row"><span class="prof-k">偏好</span><span class="prof-v">${prefHtml}</span></div>`
+    + `<div class="prof-row"><span class="prof-k">常提到</span><span class="prof-v">${termHtml}</span></div>`
+    + `<div class="prof-row"><span class="prof-k">交互</span><span class="prof-v">${p.interaction_count || 0} 次</span></div>`;
+}
+
+async function savePreferences(list) {
+  const res = await authFetch(profileUrl(), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ preferences: list }),
+  });
+  if (!res.ok) return false;
+  renderProfile(await res.json());
+  return true;
+}
+
+async function addPreference() {
+  const input = document.getElementById("prefInput");
+  const value = input.value.trim();
+  if (!value) return;
+  try {
+    const res = await authFetch(profileUrl());
+    const current = res.ok ? ((await res.json()).preferences || []) : [];
+    if (current.includes(value)) { input.value = ""; return; }
+    if (await savePreferences(current.concat([value]))) {
+      input.value = "";
+      toast("已加入画像，之后的回答会参考它");
+    } else { toast("添加失败"); }
+  } catch (e) { toast("添加失败"); }
+}
+
+async function removePreference(value) {
+  try {
+    const res = await authFetch(profileUrl());
+    if (!res.ok) return;
+    const current = (await res.json()).preferences || [];
+    await savePreferences(current.filter((x) => x !== value));
+  } catch (e) { /* 忽略 */ }
+}
+
+async function clearProfile() {
+  try {
+    await authFetch(profileUrl(), { method: "DELETE" });
+    await loadProfile();
+    toast("画像已清除");
+  } catch (e) { toast("清除失败"); }
+}
+
 function scrollDown() { chatArea.scrollTop = chatArea.scrollHeight; }
 
 function addMsg(role, text, tags) {
@@ -903,7 +1028,7 @@ function resultTags(data) {
 function buildRequest(sid, msg) {
   const body = { session_id: sid, message: msg };
   if (requestModel) body.model = requestModel;
-  if (localUserId) body.user_id = localUserId;   // 用于用户画像与记忆归属
+  body.user_id = localUserId;   // 画像与记忆归属；无鉴权时由本地自动生成，始终携带
   const headers = { "Content-Type": "application/json", "X-Web-Search": webSearchEnabled ? "1" : "0" };
   return { body, headers };
 }
@@ -1018,6 +1143,7 @@ async function send() {
   }
   sendBtn.disabled = false;
   sendBtn.textContent = "发送";
+  loadProfile();          // 交互次数与术语可能已更新，刷新侧边栏的画像卡片
 }
 
 /* ==================== 事件绑定 ==================== */
@@ -1046,12 +1172,14 @@ document.getElementById("sessionList").addEventListener("click", (e) => {
 });
 document.getElementById("btnSidebar").addEventListener("click", openSidebar);
 document.getElementById("scrim").addEventListener("click", closeSidebar);
-const userIdInput = document.getElementById("userId");
-userIdInput.addEventListener("change", () => {
-  localUserId = userIdInput.value.trim();
-  if (localUserId) localStorage.setItem(LS_USER, localUserId);
-  else localStorage.removeItem(LS_USER);
-  toast(localUserId ? "画像将记录到「" + localUserId + "」" : "已关闭画像记录");
+document.getElementById("btnProfileClear").addEventListener("click", clearProfile);
+document.getElementById("btnPrefAdd").addEventListener("click", addPreference);
+document.getElementById("prefInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); addPreference(); }
+});
+document.getElementById("profileBody").addEventListener("click", (e) => {
+  const un = e.target.closest("[data-unpref]");
+  if (un) removePreference(un.dataset.unpref);
 });
 document.getElementById("btnLogin").addEventListener("click", login);
 document.getElementById("loginPass").addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
