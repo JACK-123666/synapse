@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.core.deps import CurrentUser, get_current_user
@@ -45,17 +46,6 @@ async def search_memories(
     return await get_long_term_memory().recall(
         query_text=q, top_k=top_k, user_id=_memory_user(user, user_id)
     )
-
-
-@router.delete("/{record_id}", summary="删除一条长期记忆摘要")
-async def delete_memory(
-    record_id: str,
-    user: CurrentUser = Depends(get_current_user),
-) -> Dict[str, Any]:
-    owner = user.id if get_settings().auth_enabled and not user.is_admin else None
-    if not await get_long_term_memory().delete_summary(record_id, user_id=owner):
-        raise HTTPException(status_code=404, detail="记忆不存在")
-    return {"ok": True}
 
 
 @router.get("/sessions", summary="列出会话（历史对话）")
@@ -121,13 +111,30 @@ async def get_session(
     return await get_short_term_memory().get_messages(session_key_for(user.id, session_id))
 
 
-@router.delete("/sessions/{session_id}", summary="清空会话短期记忆")
+@router.delete("/sessions/{session_id}", summary="删除会话")
 async def clear_session(
     session_id: str,
+    purge: bool = Query(False, description="同时删除该会话产生的长期记忆摘要"),
     user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    await get_short_term_memory().clear(session_key_for(user.id, session_id))
-    return {"ok": True}
+    """删除一个会话。
+
+    默认只清短期记忆（会话从列表里消失，但压缩出的长期摘要仍留在记忆里）；
+    purge=true 时连同它的长期摘要一起删除，用于"彻底删掉这段对话"。
+    """
+    key = session_key_for(user.id, session_id)
+    await get_short_term_memory().clear(key)
+
+    removed = 0
+    if purge:
+        long_term = get_long_term_memory()
+        owner = user.id if get_settings().auth_enabled else None
+        for summary in await long_term.list_summaries(user_id=owner, limit=500):
+            if (summary.get("metadata") or {}).get("session_id") == key:
+                if await long_term.delete_summary(summary["id"], user_id=owner):
+                    removed += 1
+
+    return {"ok": True, "summaries_deleted": removed}
 
 
 @router.get("/profile", summary="查看用户画像")
@@ -139,3 +146,54 @@ async def get_profile(
     if not target:
         raise HTTPException(status_code=400, detail="关闭鉴权时请提供 user_id")
     return await get_user_profile_manager().get_profile(target)
+
+
+class ProfileUpdate(BaseModel):
+    """用户画像的可编辑字段。"""
+
+    preferences: Optional[List[str]] = Field(default=None, description="偏好标签，整体替换")
+    custom: Optional[Dict[str, Any]] = Field(default=None, description="自定义字段，整体替换")
+
+
+@router.put("/profile", summary="更新用户画像")
+async def put_profile(
+    payload: ProfileUpdate,
+    user_id: Optional[str] = Query(None),
+    user: CurrentUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """整体替换画像中的指定字段；没传的字段保持不动。"""
+    target = _memory_user(user, user_id)
+    if not target:
+        raise HTTPException(status_code=400, detail="关闭鉴权时请提供 user_id")
+    manager = get_user_profile_manager()
+    if payload.preferences is not None:
+        await manager.set_preferences(target, payload.preferences)
+    if payload.custom is not None:
+        await manager.set_custom(target, payload.custom)
+    return await manager.get_profile(target)
+
+
+@router.delete("/profile", summary="清除用户画像")
+async def delete_profile(
+    user_id: Optional[str] = Query(None),
+    user: CurrentUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """删除整个用户画像（偏好、术语、计数全部清空）。"""
+    target = _memory_user(user, user_id)
+    if not target:
+        raise HTTPException(status_code=400, detail="关闭鉴权时请提供 user_id")
+    await get_user_profile_manager().clear(target)
+    return {"ok": True}
+
+
+# 注意：这条通配路由必须放在所有静态 DELETE 路径之后。
+# FastAPI 按注册顺序匹配，/{record_id} 会把 /memories/profile 也吃掉。
+@router.delete("/{record_id}", summary="删除一条长期记忆摘要")
+async def delete_memory(
+    record_id: str,
+    user: CurrentUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    owner = user.id if get_settings().auth_enabled and not user.is_admin else None
+    if not await get_long_term_memory().delete_summary(record_id, user_id=owner):
+        raise HTTPException(status_code=404, detail="记忆不存在")
+    return {"ok": True}

@@ -26,6 +26,44 @@ logger = logging.getLogger(__name__)
 _PROFILE_PREFIX = "synapse:user_profile"
 #: 画像并发更新冲突时的最大重试次数
 _MAX_UPDATE_RETRIES = 5
+#: frequent_terms 里最多保留多少个词（按出现次数排序，超出丢弃低频词）
+_MAX_TRACKED_TERMS = 100
+#: 注入 prompt 的术语数量上限 —— 太多既费 token 又稀释重点
+_MAX_PROMPT_TERMS = 8
+#: 至少出现这么多次才认为"常用"。一次性出现的短语（"我叫小明"）不入画像，
+#: 这是让画像从"噪声收集器"变成"真实特征"的关键一步。
+_MIN_TERM_FREQ = 2
+#: 常见停用词：出现频率再高也不代表用户特征
+_STOPWORDS = {
+    "你好", "您好", "谢谢", "多谢", "再见", "请问", "帮我", "帮忙", "一下",
+    "什么", "怎么", "如何", "为什么", "可以", "能否", "是否", "这个", "那个",
+    "现在", "今天", "明天", "昨天", "我们", "你们", "他们", "自己", "知道",
+    "hi", "hello", "hey", "thanks", "thank", "please", "the", "and", "you",
+    "for", "with", "this", "that", "what", "how", "why",
+}
+
+
+def _clean_terms(terms: List[str]) -> List[str]:
+    """过滤掉停用词与长度不合理的片段。"""
+    out: List[str] = []
+    for raw in terms:
+        term = str(raw).strip()
+        if not (2 <= len(term) <= 16):
+            continue
+        if term.lower() in _STOPWORDS:
+            continue
+        out.append(term)
+    return out
+
+
+def _term_counts(profile: Dict[str, Any]) -> Dict[str, int]:
+    """读取词频表，兼容早期把 frequent_terms 存成 list 的数据。"""
+    counts = profile.get("frequent_terms") or {}
+    if isinstance(counts, list):
+        return {str(t): 1 for t in counts}
+    if isinstance(counts, dict):
+        return {str(k): int(v) for k, v in counts.items()}
+    return {}
 
 
 class UserProfileManager:
@@ -33,11 +71,14 @@ class UserProfileManager:
 
     数据模型（Redis JSON）：
         {
-            "preferences": ["python", "fastapi", ...],   # 偏好标签
-            "frequent_terms": ["向量数据库", "RAG", ...], # 常用术语
-            "interaction_count": 42,                      # 交互次数
-            "custom": {}                                  # 自定义字段
+            "preferences": ["用中文回答", "简洁一点"],       # 偏好标签（显式设置）
+            "frequent_terms": {"向量数据库": 7, "RAG": 5},  # 术语 -> 出现次数
+            "interaction_count": 42,                        # 交互次数（仅统计，不注入 prompt）
+            "custom": {}                                    # 自定义字段
         }
+
+    注入 prompt 的原则：只放真正能改善回答的信息。因此交互次数不注入，
+    术语也要求出现次数达到 _MIN_TERM_FREQ 且只取 Top-N。
     """
 
     def __init__(self, settings: Optional[Settings] = None) -> None:
@@ -65,24 +106,15 @@ class UserProfileManager:
         raw = await redis.get(key)
         if raw is None:
             # 首次访问，初始化空画像
-            profile: Dict[str, Any] = {
-                "preferences": [],
-                "frequent_terms": [],
-                "interaction_count": 0,
-                "custom": {},
-            }
+            profile = self._empty_profile()
             await self.save_profile(user_id, profile)
             return profile
         try:
-            return json.loads(raw)
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else self._empty_profile()
         except json.JSONDecodeError:
             logger.warning("用户画像: 解析失败，重置: user=%s", user_id)
-            return {
-                "preferences": [],
-                "frequent_terms": [],
-                "interaction_count": 0,
-                "custom": {},
-            }
+            return self._empty_profile()
 
     async def save_profile(
         self, user_id: str, profile: Dict[str, Any]
@@ -97,7 +129,8 @@ class UserProfileManager:
     def _empty_profile() -> Dict[str, Any]:
         return {
             "preferences": [],
-            "frequent_terms": [],
+            # 词频表 {术语: 出现次数}，注入 prompt 时按次数排序取 Top-N
+            "frequent_terms": {},
             "interaction_count": 0,
             "custom": {},
         }
@@ -135,32 +168,62 @@ class UserProfileManager:
         await self.save_profile(user_id, profile)
         return profile
 
-    async def update_preferences(
+    async def set_preferences(
         self, user_id: Optional[str], preferences: List[str]
     ) -> None:
-        """更新用户偏好标签（去重合并）。"""
+        """整体替换用户偏好标签（PUT 语义）。"""
+        if not user_id:
+            return
+        cleaned = [str(p).strip() for p in preferences if str(p).strip()]
+
+        def _mutate(profile: Dict[str, Any]) -> None:
+            profile["preferences"] = list(dict.fromkeys(cleaned))
+
+        await self._atomic_update(user_id, _mutate)
+
+    async def set_custom(self, user_id: Optional[str], custom: Dict[str, Any]) -> None:
+        """整体替换自定义字段。"""
         if not user_id:
             return
 
         def _mutate(profile: Dict[str, Any]) -> None:
-            existing = list(profile.get("preferences", []))
-            profile["preferences"] = list(dict.fromkeys(existing + list(preferences)))
+            profile["custom"] = dict(custom or {})
 
         await self._atomic_update(user_id, _mutate)
 
     async def add_frequent_terms(
         self, user_id: Optional[str], terms: List[str]
     ) -> None:
-        """添加常用术语（去重合并）。"""
+        """累加术语的出现次数（而不是简单去重追加）。
+
+        只有反复出现的词才留得下来：先过一遍停用词与长度过滤，
+        注入 prompt 时还要求次数达到 _MIN_TERM_FREQ。
+        """
         if not user_id:
+            return
+        cleaned = _clean_terms(terms)
+        if not cleaned:
             return
 
         def _mutate(profile: Dict[str, Any]) -> None:
-            existing = [t for t in profile.get("frequent_terms", []) if t not in terms]
-            # 最多保留 50 个常用术语（保留最近出现的）
-            profile["frequent_terms"] = list(dict.fromkeys(existing + list(terms)))[-50:]
+            counts = _term_counts(profile)
+            for term in cleaned:
+                counts[term] = counts.get(term, 0) + 1
+            if len(counts) > _MAX_TRACKED_TERMS:
+                counts = dict(
+                    sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:_MAX_TRACKED_TERMS]
+                )
+            profile["frequent_terms"] = counts
 
         await self._atomic_update(user_id, _mutate)
+
+    async def clear(self, user_id: Optional[str]) -> None:
+        """删除用户画像。"""
+        if not user_id:
+            return
+        redis = await get_redis()
+        await redis.delete(self._key(user_id))
+        logger.info("用户画像: 已清除 user=%s", user_id)
 
     async def increment_interaction(self, user_id: Optional[str]) -> None:
         """递增用户交互次数。"""
@@ -183,21 +246,25 @@ class UserProfileManager:
         Returns:
             格式化的用户画像描述文本，无画像时返回空字符串
         """
-        profile = await self.get_profile(user_id)
-        if not profile or profile.get("interaction_count", 0) == 0:
+        if not user_id:
             return ""
+        profile = await self.get_profile(user_id)
 
         parts: List[str] = []
-        prefs = profile.get("preferences", [])
+        prefs = profile.get("preferences") or []
         if prefs:
-            parts.append(f"用户偏好: {', '.join(prefs)}")
+            parts.append("用户偏好: " + ", ".join(str(p) for p in prefs[:10]))
 
-        terms = profile.get("frequent_terms", [])
-        if terms:
-            parts.append(f"常用术语: {', '.join(terms)}")
-
-        count = profile.get("interaction_count", 0)
-        parts.append(f"历史交互次数: {count}")
+        # 只取反复出现的术语，按次数排序取 Top-N。
+        # 刻意不注入"历史交互次数"之类的统计量——它对模型生成没有帮助，纯费 token。
+        counts = _term_counts(profile)
+        ranked = sorted(
+            ((t, c) for t, c in counts.items() if c >= _MIN_TERM_FREQ),
+            key=lambda kv: kv[1],
+            reverse=True,
+        )[:_MAX_PROMPT_TERMS]
+        if ranked:
+            parts.append("用户常提到: " + ", ".join(t for t, _ in ranked))
 
         return "\n".join(parts)
 

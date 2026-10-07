@@ -201,10 +201,57 @@ async def test_profile_concurrent_increments(fake_redis):
     profile = await manager.get_profile("u-concurrent")
     assert profile["interaction_count"] == 20
 
+    # frequent_terms 现在是"术语 -> 出现次数"的词频表，不再是去重列表
     await manager.add_frequent_terms("u-concurrent", ["向量", "RAG"])
     await manager.add_frequent_terms("u-concurrent", ["RAG", "Agent"])
     profile = await manager.get_profile("u-concurrent")
-    assert profile["frequent_terms"] == ["向量", "RAG", "Agent"]
+    assert profile["frequent_terms"] == {"向量": 1, "RAG": 2, "Agent": 1}
+
+
+async def test_profile_keeps_only_recurring_terms(fake_redis):
+    """画像只保留反复出现的术语：停用词被过滤，出现一次的短语不注入 prompt。"""
+    from app.memory.profile import get_user_profile_manager
+
+    manager = get_user_profile_manager()
+    await manager.increment_interaction("u-terms")
+    await manager.add_frequent_terms("u-terms", ["Kubernetes", "你好", "Kubernetes"])
+    await manager.add_frequent_terms("u-terms", ["Kubernetes", "只出现一次的短语"])
+
+    profile = await manager.get_profile("u-terms")
+    assert profile["frequent_terms"]["Kubernetes"] == 3
+    assert "你好" not in profile["frequent_terms"]        # 停用词被过滤
+
+    context = await manager.build_prompt_context("u-terms")
+    assert "Kubernetes" in context
+    assert "只出现一次的短语" not in context               # 频次不足，不注入
+    assert "交互次数" not in context                       # 统计量不再进 prompt
+
+    await manager.set_preferences("u-terms", ["用中文回答", "结论先行"])
+    context = await manager.build_prompt_context("u-terms")
+    assert "用中文回答" in context
+
+    # 兼容早期把 frequent_terms 存成 list 的数据
+    profile["frequent_terms"] = ["旧格式术语"]
+    await manager.save_profile("u-terms", profile)
+    assert (await manager.get_profile("u-terms"))["frequent_terms"] == ["旧格式术语"]
+
+
+def test_memory_route_order_static_before_wildcard():
+    """回归：静态 DELETE 路径必须注册在 /{record_id} 之前。
+
+    FastAPI 按注册顺序匹配，delete_memory 的 /{record_id} 会把
+    /memories/profile 当成 record_id 吃掉，导致删画像报"记忆不存在"。
+    """
+    from app.api.memory import router
+
+    deletes = [
+        route.path
+        for route in router.routes
+        if "DELETE" in getattr(route, "methods", set())
+    ]
+    wildcard = deletes.index("/memories/{record_id}")
+    assert deletes.index("/memories/profile") < wildcard
+    assert deletes.index("/memories/sessions/{session_id}") < wildcard
 
 
 async def test_memory_tools_and_api(db, fake_redis, chroma, fake_embeddings):
