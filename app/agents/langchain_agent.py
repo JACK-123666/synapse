@@ -19,7 +19,6 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Tuple
 from langchain.agents import create_agent
 from langchain_core.messages import (
     AIMessage,
-    AIMessageChunk,
     BaseMessage,
     HumanMessage,
     SystemMessage,
@@ -142,8 +141,10 @@ class LangChainAgent(BaseAgent):
     include_write_tools: bool = True
     temperature: float = 0.5
     max_tokens: int = 2048
-    #: create_agent 图的最大步数（防止工具调用死循环）
+    #: create_agent 图的最大步数（防止工具调用死循环）—— execute() 的非流式路径使用
     recursion_limit: int = 16
+    #: 流式路径下最多跑几轮工具调用
+    max_tool_rounds: int = 8
 
     # ---- 可覆写的钩子 ----
 
@@ -270,52 +271,82 @@ class LangChainAgent(BaseAgent):
         inputs = self.build_messages(context, prepared)
         new_messages: List[BaseMessage] = []
         streamed: List[str] = []
-        # 已输出过文本的消息 ID：模型不支持增量输出时，messages 模式会推送完整 AIMessage
-        streamed_ids: set = set()
 
         try:
             if prepared.tools:
-                # 复用缓存的 Agent 图，不再每请求重新编译 LangGraph
-                agent = self._agent_for(context, prepared)
-                async for mode, data in agent.astream(
-                    {"messages": inputs},
-                    config={"recursion_limit": self.recursion_limit},
-                    stream_mode=["messages", "updates"],
-                ):
-                    if mode == "messages":
-                        chunk = data[0] if isinstance(data, tuple) else data
-                        if isinstance(chunk, AIMessageChunk):
-                            text = message_text(chunk)
-                            if text:
-                                streamed_ids.add(chunk.id)
-                                streamed.append(text)
-                                yield {"type": "token", "content": text}
-                        elif isinstance(chunk, AIMessage) and chunk.id not in streamed_ids:
-                            text = message_text(chunk)
-                            if text:
-                                streamed_ids.add(chunk.id)
-                                streamed.append(text)
-                                yield {"type": "token", "content": text}
-                    elif mode == "updates" and isinstance(data, dict):
-                        for update in data.values():
-                            if not isinstance(update, dict):
-                                continue
-                            for msg in update.get("messages", []) or []:
-                                new_messages.append(msg)
-                                if isinstance(msg, AIMessage) and msg.tool_calls:
-                                    for tc in msg.tool_calls:
-                                        yield {
-                                            "type": "tool_start",
-                                            "name": tc.get("name"),
-                                            "args": tc.get("args", {}),
-                                        }
-                                elif isinstance(msg, ToolMessage):
-                                    yield {
-                                        "type": "tool_end",
-                                        "name": msg.name,
-                                        "output": message_text(msg)[:500],
-                                    }
-                reply = _final_reply(new_messages) or "".join(streamed)
+                # 这里刻意不用 create_agent：它的模型节点调用的是 model_.ainvoke()（非流式），
+                # LangGraph 的 messages 模式因此收不到 token —— 整段回复会被攒成一条
+                # AIMessage 再吐出来，前端看到的就是"一次性输出"。
+                # 自己跑一遍 ReAct 循环，用 model.astream() 才能真正逐 token 推送。
+                reply = ""
+                tool_map = {t.name: t for t in prepared.tools}
+                bound = self._model(context).bind_tools(prepared.tools)
+                convo: List[BaseMessage] = [
+                    SystemMessage(content=prepared.system_prompt), *inputs
+                ]
+
+                for _ in range(self.max_tool_rounds):
+                    gathered = None
+                    round_text: List[str] = []
+                    async for chunk in bound.astream(convo):
+                        # AIMessageChunk 支持相加，逐块拼成完整的 AIMessage
+                        gathered = chunk if gathered is None else gathered + chunk
+                        text = message_text(chunk)
+                        if text:
+                            round_text.append(text)
+                            streamed.append(text)
+                            yield {"type": "token", "content": text}
+
+                    if gathered is None:
+                        # 个别 provider 不支持流式工具调用，一个 chunk 都不给。
+                        # 退回非流式取这一轮结果，避免整段回复丢失。
+                        ai_msg = await bound.ainvoke(convo)
+                        text = message_text(ai_msg)
+                        if text:
+                            round_text.append(text)
+                            streamed.append(text)
+                            yield {"type": "token", "content": text}
+                    else:
+                        ai_msg = AIMessage(
+                            content=getattr(gathered, "content", "") or "",
+                            tool_calls=list(getattr(gathered, "tool_calls", None) or []),
+                        )
+
+                    new_messages.append(ai_msg)
+                    convo.append(ai_msg)
+
+                    tool_calls = list(getattr(ai_msg, "tool_calls", None) or [])
+                    if not tool_calls:
+                        reply = "".join(round_text)
+                        break
+
+                    # 先把本轮所有 tool_start 推给前端，再逐个执行
+                    for call in tool_calls:
+                        yield {
+                            "type": "tool_start",
+                            "name": call.get("name"),
+                            "args": call.get("args", {}),
+                        }
+                    for call in tool_calls:
+                        name = call.get("name") or ""
+                        tool = tool_map.get(name)
+                        try:
+                            if tool is None:
+                                output = f"未知工具: {name}"
+                            else:
+                                raw = await tool.ainvoke(call.get("args") or {})
+                                output = raw if isinstance(raw, str) else str(raw)
+                        except Exception as exc:  # noqa: BLE001
+                            output = f"工具执行失败: {exc}"
+                        tool_msg = ToolMessage(
+                            content=output, tool_call_id=call.get("id"), name=name
+                        )
+                        new_messages.append(tool_msg)
+                        convo.append(tool_msg)
+                        yield {"type": "tool_end", "name": name, "output": output[:500]}
+
+                if not reply:
+                    reply = _final_reply(new_messages) or "".join(streamed)
             else:
                 async for chunk in self._model(context).astream(
                     [SystemMessage(content=prepared.system_prompt), *inputs]

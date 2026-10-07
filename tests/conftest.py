@@ -11,7 +11,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -31,7 +33,8 @@ sys.path.insert(0, str(ROOT))
 
 import pytest  # noqa: E402
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel  # noqa: E402
-from langchain_core.messages import AIMessage  # noqa: E402
+from langchain_core.messages import AIMessage, AIMessageChunk  # noqa: E402
+from langchain_core.outputs import ChatGenerationChunk  # noqa: E402
 
 
 class FakeToolChatModel(GenericFakeChatModel):
@@ -39,6 +42,39 @@ class FakeToolChatModel(GenericFakeChatModel):
 
     def bind_tools(self, tools: Any, **kwargs: Any):  # type: ignore[override]
         return self
+
+    def _stream(self, messages, stop=None, run_manager=None, **kwargs):  # type: ignore[override]
+        """补齐流式工具调用。
+
+        GenericFakeChatModel._stream 只在 content 非空时产出 chunk，所以
+        AIMessage(content="", tool_calls=[...])（纯工具调用消息）一个 chunk 都不给，
+        调用方会直接报 "No generation chunks were returned"。
+        真实模型是用 tool_call_chunks 流式返回工具调用的，这里对齐真实行为。
+        """
+        result = self._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+        message = result.generations[0].message
+        content = message.content or ""
+
+        if isinstance(content, str) and content:
+            for token in re.split(r"(\s)", content):
+                if token:
+                    yield ChatGenerationChunk(
+                        message=AIMessageChunk(content=token, id=message.id)
+                    )
+
+        for call in getattr(message, "tool_calls", None) or []:
+            yield ChatGenerationChunk(
+                message=AIMessageChunk(
+                    content="",
+                    id=message.id,
+                    tool_call_chunks=[{
+                        "name": call.get("name"),
+                        "args": json.dumps(call.get("args") or {}, ensure_ascii=False),
+                        "id": call.get("id"),
+                        "index": 0,
+                    }],
+                )
+            )
 
 
 def fake_model(*replies: Any) -> FakeToolChatModel:
