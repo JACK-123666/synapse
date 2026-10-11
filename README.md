@@ -163,8 +163,8 @@ Everything lives in `.env` — see [`.env.example`](.env.example) for the comple
 |---|---|---|
 | `SHORT_TERM_MAX_ROUNDS` | 10 | turns kept in Redis |
 | `SUMMARY_TRIGGER_ROUNDS` | 8 | turns before background compression kicks in |
-| `RAG_CHUNK_SIZE` | 300 | chunk length — too large and a chunk's vector averages over several topics, drowning the query signal |
-| `RAG_CHUNK_WINDOW` | 1 | neighbouring chunks pulled in on a hit: small chunks match, the window restores context |
+| `RAG_CHUNK_SIZE` | 200 | chunk length. **Capped by the embedding model**, not by taste: the bundled ONNX tokenizer truncates at 254 tokens, and Chinese runs ~0.86 tokens/char — anything past ~285 chars is invisible to the model and can never be retrieved |
+| `RAG_CHUNK_WINDOW` | 2 | neighbouring chunks pulled in on a hit: small chunks match, the window restores context. Window text goes to the LLM, so it is not subject to the token cap |
 | `RAG_MIN_CHUNK_SIZE` | 0 (auto) | fragments below this get merged — **do not disable**, tiny chunks embed degenerately and match everything |
 | `RAG_TOP_K` | 5 | retrieval depth |
 | `INTENT_SHORT_CIRCUIT` | true | skip the LLM intent call when the cheap paths agree |

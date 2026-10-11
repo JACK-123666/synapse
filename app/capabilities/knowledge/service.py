@@ -30,6 +30,12 @@ logger = logging.getLogger(__name__)
 _EMBED_BATCH = 64
 _VISIBILITIES = ("private", "shared")
 
+#: 本地 ONNX 模型（all-MiniLM-L6-v2）的 tokenizer 硬截断 254 token。
+#: 中文约 0.86 token/字，因此超过约 285 字的块尾部对模型不可见 —— 那部分内容
+#: 无论怎么检索都找不回来。这里留出余量取 250。
+_LOCAL_EMBED_SAFE_CHARS = 250
+_warned_chunk_size = False
+
 
 class KnowledgeError(ValueError):
     """知识库操作错误（不存在、参数非法等）。"""
@@ -126,6 +132,27 @@ class KnowledgeService:
             separators=["\n\n", "\n", "。", "！", "？", "；", ". ", " ", ""],
         )
 
+    def _warn_if_chunk_too_large(self) -> None:
+        """切片超过 embedding 模型的输入上限时提醒一次（只提醒一次，避免刷日志）。"""
+        global _warned_chunk_size
+        if _warned_chunk_size:
+            return
+        size = int(self._settings.rag_chunk_size or 0)
+        if size <= _LOCAL_EMBED_SAFE_CHARS:
+            return
+        from app.llm.config import get_llm_config
+
+        provider = str(get_llm_config().get("embedding_provider", "") or "").lower()
+        if provider != "local":
+            return
+        _warned_chunk_size = True
+        logger.warning(
+            "RAG_CHUNK_SIZE=%d 超过本地 embedding 模型的安全上限（约 %d 字）："
+            "该模型 tokenizer 硬截断在 254 token，超长块的尾部内容将无法被检索到。"
+            "建议调低到 %d，或改用支持长输入的 embedding 服务",
+            size, _LOCAL_EMBED_SAFE_CHARS, self._settings.rag_chunk_size,
+        )
+
     def _split(self, text: str) -> List[str]:
         """切片，并把过短的碎片并入相邻块。
 
@@ -133,6 +160,8 @@ class KnowledgeService:
         实测 9 个字的「# 向量数据库入门」与「红烧肉怎么做」的余弦相似度高达 0.72，
         比任何真正相关的内容都高，足以把检索结果整体带偏。
         """
+        self._warn_if_chunk_too_large()
+
         raw = [c.strip() for c in self._splitter().split_text(text)]
         raw = [c for c in raw if c]
         if not raw:

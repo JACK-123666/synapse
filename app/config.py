@@ -148,12 +148,13 @@ class Settings(BaseSettings):
 
     # 知识库（RAG）
     rag_chunk_size: int = Field(
-        default=300,
-        description="文档切片长度（字符）。小块匹配更准，上下文完整性由 RAG_CHUNK_WINDOW 负责。"
-        "实测：800 字时相关内容与无关内容的区分度为负（检索基本失效），"
-        "300 字时恢复正常且噪声最低",
+        default=200,
+        description="文档切片长度（字符）。上限由 embedding 模型决定：本地 ONNX 模型"
+        "（all-MiniLM-L6-v2）的 tokenizer 硬截断在 254 token，中文约 0.86 token/字，"
+        "因此超过约 285 字的块，尾部内容对模型完全不可见——落在尾部的内容永远检索不到。"
+        "200 字约 166 token，留出充足余量。换用长上下文 embedding API 后可调大",
     )
-    rag_chunk_overlap: int = Field(default=50, description="切片重叠长度（字符）")
+    rag_chunk_overlap: int = Field(default=40, description="切片重叠长度（字符）")
     rag_min_chunk_size: int = Field(
         default=0,
         description="块的最小长度，不足的碎片会并入相邻块。0 表示自动取切片长度的一半。"
@@ -161,10 +162,10 @@ class Settings(BaseSettings):
         "实测 1~20 字的碎块与任意无关问题的相似度高达 0.68，会把检索结果整体带偏",
     )
     rag_chunk_window: int = Field(
-        default=1,
-        description="检索命中后，向前后各取几个相邻块拼成上下文。"
-        "0 表示只用命中的块本身。默认 1 时每个命中返回约 3 块（≈900 字），"
-        "与原先直接切 800 字交给模型的内容量相当",
+        default=2,
+        description="检索命中后，向前后各取几个相邻块拼成上下文。0 表示只用命中的块本身。"
+        "窗口的内容是交给大模型的，不受 embedding 的 token 上限影响，"
+        "因此可以放心取大一些：默认 2 时每个命中返回约 5 块（≈1000 字）",
     )
     rag_min_score: float = Field(
         default=0.0,
