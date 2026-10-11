@@ -47,3 +47,10 @@ prometheus_data/
 htmlcov/
 .coverage
 .pytest_cache/
+
+# 鏈湴缁冧範鑴氭湰锛堜釜浜哄涔犵敤锛屼笉杩涗粨搴擄級
+examples/
+
+# 璇勬祴杈撳嚭蹇収锛堢敱 tools/eval_*.py 鐢熸垚锛屽彲闅忔椂閲嶆柊璺戝嚭鏉ワ級
+tools/eval_*.json
+
