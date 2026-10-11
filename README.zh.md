@@ -256,23 +256,7 @@ app/
 └── static/index.html           聊天页（原生 JS + SSE）
 
 plugins/example_plugin/         示例能力插件
-tests/                          pytest —— Redis / Chroma / 数据库 / LLM 全部换成本地替身
-tools/                          离线评测脚本
 ```
-
----
-
-## 开发与测试
-
-```bash
-pip install -r requirements-dev.txt   # 核心 + 测试依赖
-pytest                                # 81 个用例，约 45 秒，不需要联网
-python tools/eval_intent.py --no-llm  # 意图识别评测
-python tools/eval_memory.py           # 记忆 Token 开销评测
-```
-
-测试套件把每一个外部依赖都换成了本地替身 —— `fakeredis`、ChromaDB 的临时客户端、
-临时 SQLite 文件，以及一个可编排回复的假聊天模型。整个过程不碰网络。
 
 ---
 

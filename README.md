@@ -264,24 +264,7 @@ app/
 └── static/index.html           Chat UI (vanilla JS, SSE)
 
 plugins/example_plugin/         Example capability plugin
-tests/                          pytest — Redis / Chroma / DB / LLM all replaced by fakes
-tools/                          Offline evaluation scripts
 ```
-
----
-
-## Development
-
-```bash
-pip install -r requirements-dev.txt   # core + test dependencies
-pytest                                # 81 tests, ~45s, no network needed
-python tools/eval_intent.py --no-llm  # intent-recognition evaluation
-python tools/eval_memory.py           # memory token-cost evaluation
-```
-
-The test suite replaces every external service with a local fake — `fakeredis`, ChromaDB's
-ephemeral client, a temporary SQLite file, and an orchestratable fake chat model. Nothing touches
-the network, and the two log lines about a degraded backend will not appear.
 
 ---
 
