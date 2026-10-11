@@ -147,8 +147,30 @@ class Settings(BaseSettings):
     )
 
     # 知识库（RAG）
-    rag_chunk_size: int = Field(default=800, description="文档切片长度（字符）")
-    rag_chunk_overlap: int = Field(default=120, description="切片重叠长度（字符）")
+    rag_chunk_size: int = Field(
+        default=300,
+        description="文档切片长度（字符）。小块匹配更准，上下文完整性由 RAG_CHUNK_WINDOW 负责。"
+        "实测：800 字时相关内容与无关内容的区分度为负（检索基本失效），"
+        "300 字时恢复正常且噪声最低",
+    )
+    rag_chunk_overlap: int = Field(default=50, description="切片重叠长度（字符）")
+    rag_min_chunk_size: int = Field(
+        default=0,
+        description="块的最小长度，不足的碎片会并入相邻块。0 表示自动取切片长度的一半。"
+        "必须设置：过短的文本（如只剩一个标题行）会产生退化向量，"
+        "实测 1~20 字的碎块与任意无关问题的相似度高达 0.68，会把检索结果整体带偏",
+    )
+    rag_chunk_window: int = Field(
+        default=1,
+        description="检索命中后，向前后各取几个相邻块拼成上下文。"
+        "0 表示只用命中的块本身。默认 1 时每个命中返回约 3 块（≈900 字），"
+        "与原先直接切 800 字交给模型的内容量相当",
+    )
+    rag_min_score: float = Field(
+        default=0.0,
+        description="低于该相似度的检索结果直接丢弃。0 表示不过滤；"
+        "embedding 模型区分度足够时可以调高（如 0.35）来挡掉无关内容",
+    )
     rag_top_k: int = Field(default=5, description="知识库检索 Top-K")
     upload_max_mb: int = Field(default=20, description="单个上传文件大小上限（MB）")
 

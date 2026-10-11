@@ -163,7 +163,10 @@ Everything lives in `.env` — see [`.env.example`](.env.example) for the comple
 |---|---|---|
 | `SHORT_TERM_MAX_ROUNDS` | 10 | turns kept in Redis |
 | `SUMMARY_TRIGGER_ROUNDS` | 8 | turns before background compression kicks in |
-| `RAG_CHUNK_SIZE` / `RAG_TOP_K` | 800 / 5 | chunking and retrieval |
+| `RAG_CHUNK_SIZE` | 300 | chunk length — too large and a chunk's vector averages over several topics, drowning the query signal |
+| `RAG_CHUNK_WINDOW` | 1 | neighbouring chunks pulled in on a hit: small chunks match, the window restores context |
+| `RAG_MIN_CHUNK_SIZE` | 0 (auto) | fragments below this get merged — **do not disable**, tiny chunks embed degenerately and match everything |
+| `RAG_TOP_K` | 5 | retrieval depth |
 | `INTENT_SHORT_CIRCUIT` | true | skip the LLM intent call when the cheap paths agree |
 | `INTENT_LLM_TIMEOUT` | 5.0 | the LLM intent path gets its own timeout |
 | `AGENT_TIMEOUT` | 30 | per-agent timeout before failover |

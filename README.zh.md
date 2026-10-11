@@ -155,7 +155,10 @@ curl -s -X POST http://localhost:8000/chat \
 |------|--------|------|
 | `SHORT_TERM_MAX_ROUNDS` | 10 | Redis 里保留的对话轮数 |
 | `SUMMARY_TRIGGER_ROUNDS` | 8 | 触发后台压缩的轮数阈值 |
-| `RAG_CHUNK_SIZE` / `RAG_TOP_K` | 800 / 5 | 切片长度与检索条数 |
+| `RAG_CHUNK_SIZE` | 300 | 切片长度。过大时一个块的向量会变成多个子话题的平均值，把查询信号淹掉 |
+| `RAG_CHUNK_WINDOW` | 1 | 命中后向前后各取几块。**小块负责匹配准，窗口负责上下文全** |
+| `RAG_MIN_CHUNK_SIZE` | 0（自动） | 不足此长度的碎片并入相邻块。**不要关闭** —— 过短的块向量退化，跟什么都能匹配上 |
+| `RAG_TOP_K` | 5 | 检索条数 |
 | `INTENT_SHORT_CIRCUIT` | true | 便宜的本地两路一致时跳过 LLM 意图识别 |
 | `INTENT_LLM_TIMEOUT` | 5.0 | LLM 意图路有独立超时，超时即视为该路失败 |
 | `AGENT_TIMEOUT` | 30 | 单个 Agent 的超时，超时触发降级 |

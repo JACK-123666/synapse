@@ -67,6 +67,30 @@ async def test_kb_reindex_and_duplicate_name(db, chroma, fake_embeddings):
     assert await service.search(ALICE, "第一段内容")
 
 
+def test_split_merges_short_fragments(monkeypatch):
+    """过短的碎片必须并入相邻块。
+
+    孤立的短块（典型是只剩一个标题行）会产生**退化向量**：实测一个 9 字的
+    「# 向量数据库入门」与「红烧肉怎么做」的余弦相似度高达 0.72，比任何真正
+    相关的内容都高，足以把整个检索结果带偏。
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_chunk_size", 300)
+    monkeypatch.setattr(settings, "rag_chunk_overlap", 50)
+    monkeypatch.setattr(settings, "rag_min_chunk_size", 0)  # 0 = 自动取切片长度的一半
+
+    text = "# 标题\n\n" + "第一段的内容。" * 30 + "\n\n## 小节\n\n" + "第二段的内容。" * 30
+    chunks = get_knowledge_service()._split(text)
+
+    assert len(chunks) >= 2
+    floor = 300 // 2
+    assert all(len(c) >= floor for c in chunks), [len(c) for c in chunks]
+    # 标题不能自成一块
+    assert "# 标题" not in [c.strip() for c in chunks]
+
+
 def test_loaders_docx_and_unsupported():
     import docx
 

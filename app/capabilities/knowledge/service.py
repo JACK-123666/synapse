@@ -126,6 +126,37 @@ class KnowledgeService:
             separators=["\n\n", "\n", "。", "！", "？", "；", ". ", " ", ""],
         )
 
+    def _split(self, text: str) -> List[str]:
+        """切片，并把过短的碎片并入相邻块。
+
+        为什么要合并：孤立的短片段（典型是一个只有标题的行）会生成退化的向量 ——
+        实测 9 个字的「# 向量数据库入门」与「红烧肉怎么做」的余弦相似度高达 0.72，
+        比任何真正相关的内容都高，足以把检索结果整体带偏。
+        """
+        raw = [c.strip() for c in self._splitter().split_text(text)]
+        raw = [c for c in raw if c]
+        if not raw:
+            return []
+
+        configured = int(self._settings.rag_min_chunk_size or 0)
+        # 0 表示自动：取切片长度的一半
+        min_size = configured if configured > 0 else max(1, self._settings.rag_chunk_size // 2)
+
+        merged: List[str] = []
+        for chunk in raw:
+            # 太短就并进前一块
+            if merged and len(chunk) < min_size:
+                merged[-1] = merged[-1] + "\n" + chunk
+            else:
+                merged.append(chunk)
+
+        # 首块过短：并入后一块，避免它单独成块
+        if len(merged) >= 2 and len(merged[0]) < min_size:
+            merged[1] = merged[0] + "\n" + merged[1]
+            merged.pop(0)
+
+        return merged
+
     def _text_path(self, doc_id: str) -> Path:
         return self._settings.data_path("kb_texts", f"{doc_id}.txt")
 
@@ -359,7 +390,7 @@ class KnowledgeService:
         title: str,
         text: str,
     ) -> int:
-        chunks = [c for c in self._splitter().split_text(text) if c.strip()]
+        chunks = self._split(text)
         if not chunks:
             return 0
         llm = get_llm_client()
@@ -460,7 +491,10 @@ class KnowledgeService:
         query_embedding = await get_llm_client().embed(query)
 
         def _query_all() -> List[Dict[str, Any]]:
-            results: List[Dict[str, Any]] = []
+            window = max(0, int(self._settings.rag_chunk_window or 0))
+            min_score = float(self._settings.rag_min_score or 0.0)
+            groups: List[List[Dict[str, Any]]] = []
+
             for kb in kbs:
                 try:
                     collection = self._collection(kb.collection_name)
@@ -475,20 +509,83 @@ class KnowledgeService:
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("知识库 %s 检索失败: %s", kb.name, exc)
                     continue
+
+                hits: List[Dict[str, Any]] = []
                 docs = (res.get("documents") or [[]])[0]
                 metas = (res.get("metadatas") or [[]])[0]
                 dists = (res.get("distances") or [[]])[0]
                 for text, meta, dist in zip(docs, metas, dists):
                     meta = meta or {}
-                    results.append({
+                    score = max(0.0, 1.0 - float(dist))
+                    if score < min_score:
+                        continue
+                    hits.append({
                         "text": text,
-                        "score": max(0.0, 1.0 - float(dist)),
+                        "score": score,
                         "kb": kb.name,
                         "kb_id": kb.id,
                         "filename": meta.get("filename", ""),
                         "doc_id": meta.get("doc_id", ""),
-                        "chunk": meta.get("chunk", 0),
+                        "chunk": int(meta.get("chunk", 0) or 0),
+                        "_collection": collection,
                     })
+                if hits:
+                    groups.append(hits)
+
+            results: List[Dict[str, Any]] = []
+            for hits in groups:
+                hits.sort(key=lambda h: h["score"], reverse=True)
+
+                # 同一文档里已经保留了邻近块就跳过，避免返回重复的上下文
+                kept: List[Dict[str, Any]] = []
+                for hit in hits:
+                    if any(
+                        hit["doc_id"] == prev["doc_id"]
+                        and abs(hit["chunk"] - prev["chunk"]) <= 2 * window
+                        for prev in kept
+                    ):
+                        continue
+                    kept.append(hit)
+                    if len(kept) >= k:
+                        break
+
+                # 小块负责"匹配准"，窗口负责"上下文全"：
+                # 命中后把前后相邻块一并取回拼起来，交给模型的内容量与直接切大块相当，
+                # 但匹配用的是聚焦的小块，相似度信号不会被块内的平均语义稀释。
+                if window > 0 and kept:
+                    collection = kept[0]["_collection"]
+                    want = {
+                        f"{h['doc_id']}_{h['chunk'] + d}"
+                        for h in kept
+                        for d in range(-window, window + 1)
+                        if d != 0 and h["chunk"] + d >= 0
+                    }
+                    neighbors: Dict[str, str] = {}
+                    if want:
+                        try:
+                            got = collection.get(ids=sorted(want), include=["documents"])
+                            for gid, gdoc in zip(
+                                got.get("ids") or [], got.get("documents") or []
+                            ):
+                                neighbors[gid] = gdoc
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning("知识库邻块补齐失败: %s", exc)
+
+                    for hit in kept:
+                        pieces = []
+                        for d in range(-window, window + 1):
+                            piece = (
+                                hit["text"] if d == 0
+                                else neighbors.get(f"{hit['doc_id']}_{hit['chunk'] + d}")
+                            )
+                            if piece:
+                                pieces.append(piece)
+                        hit["text"] = "\n".join(pieces)
+
+                for hit in kept:
+                    hit.pop("_collection", None)
+                results.extend(kept)
+
             return results
 
         results = await asyncio.to_thread(_query_all)
